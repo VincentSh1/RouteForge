@@ -15,14 +15,14 @@ func TestLoadDefaults(t *testing.T) {
 	} {
 		t.Setenv(key, "")
 	}
-	t.Setenv("ROUTEFORGE_ADDR", ":8080")
+	t.Setenv("ROUTEFORGE_ADDR", "127.0.0.1:8080")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Addr != ":8080" {
-		t.Fatalf("Addr = %q, want :8080", cfg.Addr)
+	if cfg.Addr != "127.0.0.1:8080" {
+		t.Fatalf("Addr = %q, want 127.0.0.1:8080", cfg.Addr)
 	}
 	if cfg.ReadTimeout != 15*time.Second || cfg.WriteTimeout != 30*time.Second {
 		t.Fatalf("unexpected default timeouts: %+v", cfg)

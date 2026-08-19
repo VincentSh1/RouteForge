@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	defaultAddr            = ":8080"
+	defaultAddr            = "127.0.0.1:8080"
 	defaultReadTimeout     = 15 * time.Second
 	defaultWriteTimeout    = 30 * time.Second
 	defaultIdleTimeout     = 60 * time.Second

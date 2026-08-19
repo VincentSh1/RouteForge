@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 
-	"github.com/VincentSh1/RouteForge/internal/gateway"
 	"github.com/VincentSh1/RouteForge/internal/openai"
 )
 
@@ -43,6 +43,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed", "invalid_request_error", nil, "method_not_allowed")
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "content type must be application/json", "invalid_request_error", nil, "unsupported_media_type")
 		return
 	}
 

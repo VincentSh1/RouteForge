@@ -25,8 +25,6 @@ func (e *UnsupportedRoleError) Error() string {
 	return fmt.Sprintf("messages[%d].role %q is not supported", e.Index, e.Role)
 }
 
-// Service owns completion validation and provider delegation. Routing policy
-// can be added here later without changing the HTTP transport.
 type Service struct {
 	provider provider.Provider
 }

@@ -17,7 +17,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		slog.Error("RouteForge stopped", "error", err)
+		slog.Error("RouteForge stopped")
 		os.Exit(1)
 	}
 }
@@ -38,7 +38,7 @@ func run() error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		slog.Info("RouteForge listening", "address", cfg.Addr, "provider", completionProvider.Name())
+		slog.Info("RouteForge listening", "provider", completionProvider.Name())
 		serverErr <- server.ListenAndServe()
 	}()
 

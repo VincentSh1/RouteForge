@@ -18,6 +18,12 @@ func testHandler(p *mock.Provider) http.Handler {
 	return NewHandler(gateway.New(p)).Routes()
 }
 
+func chatRequest(method, body string) *http.Request {
+	req := httptest.NewRequest(method, "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
 func TestHealth(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	testHandler(&mock.Provider{}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
@@ -32,7 +38,7 @@ func TestHealth(t *testing.T) {
 func TestChatCompletions(t *testing.T) {
 	body := []byte(`{"model":"client-model","messages":[{"role":"user","content":"Hello"}],"unknown":"ignored"}`)
 	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	req := chatRequest(http.MethodPost, string(body))
 	testHandler(&mock.Provider{ResponseText: "Mock answer"}).ServeHTTP(recorder, req)
 
 	if recorder.Code != http.StatusOK {
@@ -63,7 +69,7 @@ func TestChatCompletionsValidationErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(test.body))
+			req := chatRequest(http.MethodPost, test.body)
 			testHandler(&mock.Provider{}).ServeHTTP(recorder, req)
 			if recorder.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
@@ -82,7 +88,7 @@ func TestChatCompletionsValidationErrors(t *testing.T) {
 func TestChatCompletionsRejectsMalformedOrMultipleJSON(t *testing.T) {
 	for _, body := range []string{`{"model":`, `{} {}`} {
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body))
+		req := chatRequest(http.MethodPost, body)
 		testHandler(&mock.Provider{}).ServeHTTP(recorder, req)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("body %q: status = %d, want %d", body, recorder.Code, http.StatusBadRequest)
@@ -94,10 +100,36 @@ func TestChatCompletionsMapsProviderError(t *testing.T) {
 	providerErr := providerpkg.NewError(providerpkg.ErrorRateLimited, "mock", errors.New("quota"))
 	body := `{"model":"model","messages":[{"role":"user"}]}`
 	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body))
+	req := chatRequest(http.MethodPost, body)
 	testHandler(&mock.Provider{Err: providerErr}).ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusTooManyRequests)
+	}
+	if bytes.Contains(recorder.Body.Bytes(), []byte("quota")) {
+		t.Fatal("response exposed raw provider error")
+	}
+}
+
+func TestChatCompletionsRejectsUnsupportedContentType(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "text/plain")
+	testHandler(&mock.Provider{}).ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnsupportedMediaType)
+	}
+}
+
+func TestChatCompletionsRejectsOversizedBody(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	body := `{"model":"` + string(bytes.Repeat([]byte("x"), maxRequestBodyBytes)) + `","messages":[{"role":"user"}]}`
+	req := chatRequest(http.MethodPost, body)
+	testHandler(&mock.Provider{}).ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("request body is too large")) {
+		t.Fatalf("response did not identify body-size violation: %s", recorder.Body.String())
 	}
 }
 
@@ -111,7 +143,8 @@ func TestMethodsAreEnforced(t *testing.T) {
 	}
 	for _, test := range tests {
 		recorder := httptest.NewRecorder()
-		testHandler(&mock.Provider{}).ServeHTTP(recorder, httptest.NewRequest(test.method, test.path, nil))
+		req := httptest.NewRequest(test.method, test.path, nil)
+		testHandler(&mock.Provider{}).ServeHTTP(recorder, req)
 		if recorder.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("%s %s: status = %d, want %d", test.method, test.path, recorder.Code, http.StatusMethodNotAllowed)
 		}

@@ -27,12 +27,12 @@ out of scope.
 go run ./cmd/routeforge
 ```
 
-The server listens on `:8080` by default. Configuration uses environment
-variables:
+The server listens on `127.0.0.1:8080` by default. Configuration uses
+environment variables:
 
 | Variable | Default |
 | --- | --- |
-| `ROUTEFORGE_ADDR` | `:8080` |
+| `ROUTEFORGE_ADDR` | `127.0.0.1:8080` |
 | `ROUTEFORGE_READ_TIMEOUT` | `15s` |
 | `ROUTEFORGE_WRITE_TIMEOUT` | `30s` |
 | `ROUTEFORGE_IDLE_TIMEOUT` | `60s` |
@@ -53,6 +53,10 @@ The `model` value is passed through unchanged. Omitting `stream` is equivalent
 to setting it to `false`; `stream: true` returns an OpenAI-style error because
 SSE is not implemented in Phase 1. Unknown JSON fields are ignored for client
 compatibility. Mock token usage values are zero and are not estimates.
+
+RouteForge has no authentication or rate limiting in Phase 1. Do not expose it
+to public or untrusted networks. A deployment must explicitly configure
+`ROUTEFORGE_ADDR` to listen on a non-loopback interface.
 
 ## Test
 
