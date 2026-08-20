@@ -1,0 +1,17 @@
+# Go build and test artifacts
+/routeforge
+*.test
+*.out
+coverage.txt
+
+# Local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
