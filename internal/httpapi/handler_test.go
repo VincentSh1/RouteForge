@@ -110,6 +110,20 @@ func TestChatCompletionsMapsProviderError(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsSanitizesFinalFallbackError(t *testing.T) {
+	first := &mock.Provider{Err: providerpkg.NewError(providerpkg.ErrorUnavailable, "first", errors.New("first secret"))}
+	second := &mock.Provider{Err: providerpkg.NewError(providerpkg.ErrorRateLimited, "second", errors.New("second secret"))}
+	handler := NewHandler(gateway.NewAuto(first, second)).Routes()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, chatRequest(http.MethodPost, `{"model":"model","messages":[{"role":"user"}]}`))
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusTooManyRequests)
+	}
+	if bytes.Contains(recorder.Body.Bytes(), []byte("secret")) {
+		t.Fatal("response exposed a raw fallback error")
+	}
+}
+
 func TestChatCompletionsRejectsUnsupportedContentType(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
