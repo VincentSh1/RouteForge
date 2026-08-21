@@ -39,6 +39,8 @@ environment variables:
 | `ROUTEFORGE_PROVIDER` | `mock` |
 | `OPENAI_API_KEY` | unset |
 | `ANTHROPIC_API_KEY` | unset |
+| `ROUTEFORGE_MODEL_GENERAL_OPENAI` | unset |
+| `ROUTEFORGE_MODEL_GENERAL_ANTHROPIC` | unset |
 
 ## Example
 
@@ -51,10 +53,10 @@ curl http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-The `model` value is passed through unchanged. Omitting `stream` is equivalent
-to setting it to `false`; `stream: true` returns an OpenAI-style error because
-SSE is not implemented in Phase 2. Unknown JSON fields are ignored for client
-compatibility. Mock token usage values are zero and are not estimates.
+Omitting `stream` is equivalent to setting it to `false`; `stream: true`
+returns an OpenAI-style error because SSE is not implemented. Unknown JSON
+fields are ignored for client compatibility. Mock token usage values are zero
+and are not estimates.
 
 ## Provider selection
 
@@ -67,15 +69,40 @@ configured real provider at most once, in this fixed order:
 
 Auto mode falls back only after rate limiting, timeout, or temporary
 unavailability. It does not fall back after an invalid request, and it never
-falls back to the mock provider. The model name is passed through unchanged, so
-it must be valid for every provider that may receive the request; logical model
-aliases are deferred to a later phase.
+falls back to the mock provider.
+
+## Model resolution
+
+With an explicit provider, a model name that does not begin with `routeforge/`
+is treated as provider-native and passed through unchanged. Provider-native
+models are rejected in auto mode because they cannot be safely sent to a
+different provider during fallback.
+
+Phase 3A defines one logical model, `routeforge/general`. Configure its
+provider-specific targets without embedding commercial model names in source:
+
+```sh
+export ROUTEFORGE_MODEL_GENERAL_OPENAI="your-openai-model"
+export ROUTEFORGE_MODEL_GENERAL_ANTHROPIC="your-anthropic-model"
+```
+
+For every auto attempt, RouteForge starts with the original logical alias and
+resolves it for that provider. For example, OpenAI receives the value from
+`ROUTEFORGE_MODEL_GENERAL_OPENAI`; after an eligible failure, Anthropic receives
+the separate Anthropic mapping. The first provider's model identifier is never
+reused for the fallback request. Successful responses expose the original
+logical alias to the client.
+
+Auto mode requires a `routeforge/general` mapping for every configured
+provider. Explicit provider mode can omit the mapping when it only uses native
+model identifiers. Explicit mock mode supports native/mock names only.
 
 To test OpenAI locally, use a real key only in your shell environment:
 
 ```sh
 export OPENAI_API_KEY="..."
 export ROUTEFORGE_PROVIDER="openai"
+export ROUTEFORGE_MODEL_GENERAL_OPENAI="your-openai-model"
 go run ./cmd/routeforge
 ```
 
@@ -84,6 +111,7 @@ For Anthropic:
 ```sh
 export ANTHROPIC_API_KEY="..."
 export ROUTEFORGE_PROVIDER="anthropic"
+export ROUTEFORGE_MODEL_GENERAL_ANTHROPIC="your-anthropic-model"
 go run ./cmd/routeforge
 ```
 
