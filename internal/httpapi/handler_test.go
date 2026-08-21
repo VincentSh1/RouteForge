@@ -9,13 +9,14 @@ import (
 	"testing"
 
 	"github.com/VincentSh1/RouteForge/internal/gateway"
+	"github.com/VincentSh1/RouteForge/internal/model"
 	"github.com/VincentSh1/RouteForge/internal/openai"
 	providerpkg "github.com/VincentSh1/RouteForge/internal/provider"
 	"github.com/VincentSh1/RouteForge/internal/provider/mock"
 )
 
 func testHandler(p *mock.Provider) http.Handler {
-	return NewHandler(gateway.New(p)).Routes()
+	return NewHandler(gateway.New(p, model.New(nil))).Routes()
 }
 
 func chatRequest(method, body string) *http.Request {
@@ -113,14 +114,66 @@ func TestChatCompletionsMapsProviderError(t *testing.T) {
 func TestChatCompletionsSanitizesFinalFallbackError(t *testing.T) {
 	first := &mock.Provider{Err: providerpkg.NewError(providerpkg.ErrorUnavailable, "first", errors.New("first secret"))}
 	second := &mock.Provider{Err: providerpkg.NewError(providerpkg.ErrorRateLimited, "second", errors.New("second secret"))}
-	handler := NewHandler(gateway.NewAuto(first, second)).Routes()
+	resolver := model.New(map[string]map[string]string{model.General: {"mock": "mock-model"}})
+	handler := NewHandler(gateway.NewAuto(resolver, first, second)).Routes()
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, chatRequest(http.MethodPost, `{"model":"model","messages":[{"role":"user"}]}`))
+	handler.ServeHTTP(recorder, chatRequest(http.MethodPost, `{"model":"routeforge/general","messages":[{"role":"user"}]}`))
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusTooManyRequests)
 	}
 	if bytes.Contains(recorder.Body.Bytes(), []byte("secret")) {
 		t.Fatal("response exposed a raw fallback error")
+	}
+}
+
+func TestChatCompletionsMapsModelResolutionErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		service    *gateway.Service
+		model      string
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "unknown alias",
+			service:    gateway.New(&mock.Provider{}, model.New(nil)),
+			model:      "routeforge/unknown",
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "unknown_model",
+		},
+		{
+			name:       "missing mapping",
+			service:    gateway.New(&mock.Provider{}, model.New(map[string]map[string]string{model.General: {}})),
+			model:      model.General,
+			wantStatus: http.StatusServiceUnavailable,
+			wantCode:   "model_unavailable",
+		},
+		{
+			name:       "native model in auto",
+			service:    gateway.NewAuto(model.New(nil), &mock.Provider{}),
+			model:      "provider-native-model",
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "provider_required",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler := NewHandler(test.service).Routes()
+			body := `{"model":"` + test.model + `","messages":[{"role":"user"}]}`
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, chatRequest(http.MethodPost, body))
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.wantStatus)
+			}
+			var response openai.ErrorResponse
+			if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+				t.Fatalf("decode error response: %v", err)
+			}
+			if response.Error.Code != test.wantCode {
+				t.Fatalf("error code = %q, want %q", response.Error.Code, test.wantCode)
+			}
+		})
 	}
 }
 

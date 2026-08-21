@@ -6,12 +6,14 @@ import (
 	"net/http"
 
 	"github.com/VincentSh1/RouteForge/internal/gateway"
+	"github.com/VincentSh1/RouteForge/internal/model"
 	"github.com/VincentSh1/RouteForge/internal/openai"
 	"github.com/VincentSh1/RouteForge/internal/provider"
 )
 
 func writeCompletionError(w http.ResponseWriter, err error) {
 	var roleErr *gateway.UnsupportedRoleError
+	var resolutionErr *model.ResolutionError
 	switch {
 	case errors.Is(err, gateway.ErrModelRequired):
 		param := "model"
@@ -25,6 +27,14 @@ func writeCompletionError(w http.ResponseWriter, err error) {
 	case errors.As(err, &roleErr):
 		param := "messages"
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", &param, "unsupported_value")
+	case errors.Is(err, gateway.ErrNativeModelInAuto):
+		param := "model"
+		writeError(w, http.StatusBadRequest, "provider-native models require explicit provider selection", "invalid_request_error", &param, "provider_required")
+	case errors.As(err, &resolutionErr) && resolutionErr.Kind == model.ErrorUnknownAlias:
+		param := "model"
+		writeError(w, http.StatusBadRequest, "the requested logical model is unknown", "invalid_request_error", &param, "unknown_model")
+	case errors.As(err, &resolutionErr), errors.Is(err, gateway.ErrNoUsableModelMapping):
+		writeError(w, http.StatusServiceUnavailable, "the requested model is unavailable", "server_error", nil, "model_unavailable")
 	default:
 		writeProviderError(w, err)
 	}

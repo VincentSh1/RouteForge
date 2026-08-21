@@ -25,15 +25,17 @@ const (
 )
 
 type Config struct {
-	Addr            string
-	ReadTimeout     time.Duration
-	WriteTimeout    time.Duration
-	IdleTimeout     time.Duration
-	ShutdownTimeout time.Duration
-	ProviderTimeout time.Duration
-	Provider        string
-	OpenAIAPIKey    string
-	AnthropicAPIKey string
+	Addr                  string
+	ReadTimeout           time.Duration
+	WriteTimeout          time.Duration
+	IdleTimeout           time.Duration
+	ShutdownTimeout       time.Duration
+	ProviderTimeout       time.Duration
+	Provider              string
+	OpenAIAPIKey          string
+	AnthropicAPIKey       string
+	GeneralOpenAIModel    string
+	GeneralAnthropicModel string
 }
 
 type ValidationError struct {
@@ -44,15 +46,17 @@ func (e *ValidationError) Error() string { return e.Message }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Addr:            envOrDefault("ROUTEFORGE_ADDR", defaultAddr),
-		ReadTimeout:     defaultReadTimeout,
-		WriteTimeout:    defaultWriteTimeout,
-		IdleTimeout:     defaultIdleTimeout,
-		ShutdownTimeout: defaultShutdownTimeout,
-		ProviderTimeout: defaultProviderTimeout,
-		Provider:        strings.ToLower(strings.TrimSpace(envOrDefault("ROUTEFORGE_PROVIDER", defaultProvider))),
-		OpenAIAPIKey:    os.Getenv("OPENAI_API_KEY"),
-		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
+		Addr:                  envOrDefault("ROUTEFORGE_ADDR", defaultAddr),
+		ReadTimeout:           defaultReadTimeout,
+		WriteTimeout:          defaultWriteTimeout,
+		IdleTimeout:           defaultIdleTimeout,
+		ShutdownTimeout:       defaultShutdownTimeout,
+		ProviderTimeout:       defaultProviderTimeout,
+		Provider:              strings.ToLower(strings.TrimSpace(envOrDefault("ROUTEFORGE_PROVIDER", defaultProvider))),
+		OpenAIAPIKey:          os.Getenv("OPENAI_API_KEY"),
+		AnthropicAPIKey:       os.Getenv("ANTHROPIC_API_KEY"),
+		GeneralOpenAIModel:    strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_OPENAI")),
+		GeneralAnthropicModel: strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_ANTHROPIC")),
 	}
 
 	values := []struct {
@@ -93,6 +97,12 @@ func Load() (Config, error) {
 	case ProviderAuto:
 		if strings.TrimSpace(cfg.OpenAIAPIKey) == "" && strings.TrimSpace(cfg.AnthropicAPIKey) == "" {
 			return Config{}, validationError("ROUTEFORGE_PROVIDER=auto requires at least one provider API key")
+		}
+		if strings.TrimSpace(cfg.OpenAIAPIKey) != "" && cfg.GeneralOpenAIModel == "" {
+			return Config{}, validationError("auto routing with OpenAI requires ROUTEFORGE_MODEL_GENERAL_OPENAI")
+		}
+		if strings.TrimSpace(cfg.AnthropicAPIKey) != "" && cfg.GeneralAnthropicModel == "" {
+			return Config{}, validationError("auto routing with Anthropic requires ROUTEFORGE_MODEL_GENERAL_ANTHROPIC")
 		}
 	default:
 		return Config{}, validationError("ROUTEFORGE_PROVIDER must be mock, openai, anthropic, or auto")

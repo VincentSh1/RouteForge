@@ -14,6 +14,7 @@ import (
 	"github.com/VincentSh1/RouteForge/internal/config"
 	"github.com/VincentSh1/RouteForge/internal/gateway"
 	"github.com/VincentSh1/RouteForge/internal/httpapi"
+	"github.com/VincentSh1/RouteForge/internal/model"
 	"github.com/VincentSh1/RouteForge/internal/provider"
 	"github.com/VincentSh1/RouteForge/internal/provider/anthropic"
 	"github.com/VincentSh1/RouteForge/internal/provider/mock"
@@ -78,13 +79,19 @@ func buildService(cfg config.Config) (*gateway.Service, error) {
 		providers = append(providers, anthropic.New(client, cfg.AnthropicAPIKey, anthropic.DefaultBaseURL))
 	}
 	registry := provider.NewRegistry(providers...)
+	resolver := model.New(map[string]map[string]string{
+		model.General: {
+			openaiadapter.Name: cfg.GeneralOpenAIModel,
+			anthropic.Name:     cfg.GeneralAnthropicModel,
+		},
+	})
 
 	if cfg.Provider != config.ProviderAuto {
 		selected, ok := registry.Get(cfg.Provider)
 		if !ok {
 			return nil, fmt.Errorf("configured provider is unavailable")
 		}
-		return gateway.New(selected), nil
+		return gateway.New(selected, resolver), nil
 	}
 
 	orderedNames := []string{openaiadapter.Name, anthropic.Name}
@@ -97,5 +104,5 @@ func buildService(cfg config.Config) (*gateway.Service, error) {
 	if len(ordered) == 0 {
 		return nil, fmt.Errorf("no automatic providers are configured")
 	}
-	return gateway.NewAuto(ordered...), nil
+	return gateway.NewAuto(resolver, ordered...), nil
 }
