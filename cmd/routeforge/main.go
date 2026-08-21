@@ -3,21 +3,31 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/VincentSh1/RouteForge/internal/config"
 	"github.com/VincentSh1/RouteForge/internal/gateway"
 	"github.com/VincentSh1/RouteForge/internal/httpapi"
+	"github.com/VincentSh1/RouteForge/internal/provider"
+	"github.com/VincentSh1/RouteForge/internal/provider/anthropic"
 	"github.com/VincentSh1/RouteForge/internal/provider/mock"
+	openaiadapter "github.com/VincentSh1/RouteForge/internal/provider/openai"
 )
 
 func main() {
 	if err := run(); err != nil {
-		slog.Error("RouteForge stopped")
+		var validationErr *config.ValidationError
+		if errors.As(err, &validationErr) {
+			slog.Error("invalid configuration", "reason", validationErr.Error())
+		} else {
+			slog.Error("RouteForge stopped")
+		}
 		os.Exit(1)
 	}
 }
@@ -28,8 +38,10 @@ func run() error {
 		return err
 	}
 
-	completionProvider := &mock.Provider{}
-	service := gateway.New(completionProvider)
+	service, err := buildService(cfg)
+	if err != nil {
+		return err
+	}
 	handler := httpapi.NewHandler(service)
 	server := httpapi.NewServer(cfg, handler.Routes())
 
@@ -38,7 +50,7 @@ func run() error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		slog.Info("RouteForge listening", "provider", completionProvider.Name())
+		slog.Info("RouteForge listening")
 		serverErr <- server.ListenAndServe()
 	}()
 
@@ -54,4 +66,36 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	return server.Shutdown(shutdownCtx)
+}
+
+func buildService(cfg config.Config) (*gateway.Service, error) {
+	client := &http.Client{Timeout: cfg.ProviderTimeout}
+	providers := []provider.Provider{&mock.Provider{}}
+	if strings.TrimSpace(cfg.OpenAIAPIKey) != "" {
+		providers = append(providers, openaiadapter.New(client, cfg.OpenAIAPIKey, openaiadapter.DefaultBaseURL))
+	}
+	if strings.TrimSpace(cfg.AnthropicAPIKey) != "" {
+		providers = append(providers, anthropic.New(client, cfg.AnthropicAPIKey, anthropic.DefaultBaseURL))
+	}
+	registry := provider.NewRegistry(providers...)
+
+	if cfg.Provider != config.ProviderAuto {
+		selected, ok := registry.Get(cfg.Provider)
+		if !ok {
+			return nil, fmt.Errorf("configured provider is unavailable")
+		}
+		return gateway.New(selected), nil
+	}
+
+	orderedNames := []string{openaiadapter.Name, anthropic.Name}
+	ordered := make([]provider.Provider, 0, len(orderedNames))
+	for _, name := range orderedNames {
+		if item, ok := registry.Get(name); ok {
+			ordered = append(ordered, item)
+		}
+	}
+	if len(ordered) == 0 {
+		return nil, fmt.Errorf("no automatic providers are configured")
+	}
+	return gateway.NewAuto(ordered...), nil
 }
