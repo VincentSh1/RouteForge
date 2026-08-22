@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -31,21 +33,10 @@ func New(client *http.Client, apiKey, baseURL string) *Provider {
 func (p *Provider) Name() string { return Name }
 
 func (p *Provider) Complete(ctx context.Context, req common.ChatCompletionRequest) (common.ChatCompletionResponse, error) {
-	payload := request{Model: req.Model, Messages: make([]message, len(req.Messages))}
-	for i, item := range req.Messages {
-		payload.Messages[i] = message{Role: item.Role, Content: item.Content}
-	}
-
-	body, err := json.Marshal(payload)
+	upstreamReq, err := p.upstreamRequest(ctx, req, false)
 	if err != nil {
-		return common.ChatCompletionResponse{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, errors.New("encode request"))
+		return common.ChatCompletionResponse{}, err
 	}
-	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return common.ChatCompletionResponse{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, errors.New("create request"))
-	}
-	upstreamReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-	upstreamReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.client.Do(upstreamReq)
 	if err != nil {
@@ -89,9 +80,113 @@ func (p *Provider) Complete(ctx context.Context, req common.ChatCompletionReques
 	}, nil
 }
 
+func (p *Provider) Stream(ctx context.Context, req common.ChatCompletionRequest) (providerpkg.Stream, error) {
+	upstreamReq, err := p.upstreamRequest(ctx, req, true)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := p.client.Do(upstreamReq)
+	if err != nil {
+		return nil, providerpkg.TransportError(Name, err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		_ = resp.Body.Close()
+		return nil, providerpkg.HTTPStatusError(Name, resp.StatusCode)
+	}
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || mediaType != "text/event-stream" {
+		_ = resp.Body.Close()
+		return nil, providerpkg.NewError(providerpkg.ErrorInternal, Name, errors.New("unexpected upstream content type"))
+	}
+	return &stream{ctx: ctx, body: resp.Body, events: providerpkg.NewSSEReader(resp.Body)}, nil
+}
+
+func (p *Provider) upstreamRequest(ctx context.Context, req common.ChatCompletionRequest, stream bool) (*http.Request, error) {
+	payload := request{Model: req.Model, Messages: make([]message, len(req.Messages)), Stream: stream}
+	for i, item := range req.Messages {
+		payload.Messages[i] = message{Role: item.Role, Content: item.Content}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, providerpkg.NewError(providerpkg.ErrorInternal, Name, errors.New("encode request"))
+	}
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, providerpkg.NewError(providerpkg.ErrorInternal, Name, errors.New("create request"))
+	}
+	upstreamReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	upstreamReq.Header.Set("Content-Type", "application/json")
+	return upstreamReq, nil
+}
+
+type stream struct {
+	ctx    context.Context
+	body   io.ReadCloser
+	events *providerpkg.SSEReader
+	done   bool
+}
+
+func (s *stream) Next() (providerpkg.StreamChunk, error) {
+	if s.done {
+		return providerpkg.StreamChunk{}, io.EOF
+	}
+	for {
+		event, err := s.events.Next()
+		if err != nil {
+			if s.ctx.Err() != nil {
+				return providerpkg.StreamChunk{}, providerpkg.TransportError(Name, s.ctx.Err())
+			}
+			if errors.Is(err, io.EOF) || errors.Is(err, providerpkg.ErrSSERead) {
+				return providerpkg.StreamChunk{}, providerpkg.NewError(providerpkg.ErrorUnavailable, Name, errors.New("upstream stream ended unexpectedly"))
+			}
+			return providerpkg.StreamChunk{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, errors.New("incomplete upstream stream"))
+		}
+		if string(event.Data) == "[DONE]" {
+			s.done = true
+			return providerpkg.StreamChunk{}, io.EOF
+		}
+		if len(event.Data) == 0 {
+			continue
+		}
+		var decoded streamResponse
+		if err := json.Unmarshal(event.Data, &decoded); err != nil || len(decoded.Choices) == 0 {
+			return providerpkg.StreamChunk{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, errors.New("malformed upstream stream event"))
+		}
+		choice := decoded.Choices[0]
+		finishReason := ""
+		if choice.FinishReason != nil {
+			finishReason = *choice.FinishReason
+		}
+		return providerpkg.StreamChunk{
+			ID: decoded.ID, Created: decoded.Created, Model: decoded.Model,
+			Role: choice.Delta.Role, Content: choice.Delta.Content, FinishReason: finishReason,
+		}, nil
+	}
+}
+
+func (s *stream) Close() error { return s.body.Close() }
+
 type request struct {
 	Model    string    `json:"model"`
 	Messages []message `json:"messages"`
+	Stream   bool      `json:"stream,omitempty"`
+}
+
+type streamResponse struct {
+	ID      string         `json:"id"`
+	Created int64          `json:"created"`
+	Model   string         `json:"model"`
+	Choices []streamChoice `json:"choices"`
+}
+
+type streamChoice struct {
+	Delta        streamDelta `json:"delta"`
+	FinishReason *string     `json:"finish_reason"`
+}
+
+type streamDelta struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 type message struct {
