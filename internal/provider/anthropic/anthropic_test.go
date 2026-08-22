@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -122,6 +123,128 @@ func TestCompleteRequiresNonSystemMessage(t *testing.T) {
 		Model: "claude-test", Messages: []common.Message{{Role: "system", Content: "Instruction"}},
 	})
 	assertErrorKind(t, err, providerpkg.ErrorInvalidRequest)
+}
+
+func TestStreamTranslatesAnthropicEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body request
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if r.URL.Path != "/v1/messages" || !body.Stream || body.System != "Instruction" || body.Model != "claude-test" {
+			t.Errorf("unexpected streaming request: path=%s body=%+v", r.URL.Path, body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-test\"}}\n\n"))
+		_, _ = w.Write([]byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\",\"text\":\"Hello\"}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" there\"}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\"}\n\n"))
+		_, _ = w.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n"))
+		_, _ = w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer server.Close()
+
+	stream, err := New(server.Client(), "test-key", server.URL).Stream(context.Background(), common.ChatCompletionRequest{
+		Model: "claude-test", Messages: []common.Message{{Role: "system", Content: "Instruction"}, {Role: "user", Content: "Hello"}},
+	})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	first, err := stream.Next()
+	if err != nil || first.Role != "assistant" || first.Content != "Hello" {
+		t.Fatalf("first chunk = %+v, %v", first, err)
+	}
+	second, err := stream.Next()
+	if err != nil || second.Content != " there" {
+		t.Fatalf("second chunk = %+v, %v", second, err)
+	}
+	finish, err := stream.Next()
+	if err != nil || finish.FinishReason != "stop" {
+		t.Fatalf("finish chunk = %+v, %v", finish, err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("final error = %v, want EOF", err)
+	}
+}
+
+func TestStreamRejectsMalformedAndOversizedEvents(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data string
+	}{
+		{name: "malformed", data: "not-json"},
+		{name: "oversized", data: strings.Repeat("x", providerpkg.MaxSSEEventSize+1)},
+		{name: "unsupported delta", data: `{"type":"content_block_delta","delta":{"type":"input_json_delta"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte("event: content_block_delta\ndata: " + test.data + "\n\n"))
+			}))
+			defer server.Close()
+			stream, err := New(server.Client(), "test-key", server.URL).Stream(context.Background(), validRequest())
+			if err != nil {
+				t.Fatalf("Stream() error = %v", err)
+			}
+			defer stream.Close()
+			if _, err := stream.Next(); err == nil {
+				t.Fatal("Next() error = nil")
+			}
+		})
+	}
+}
+
+func TestStreamMapsTransientStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	_, err := New(server.Client(), "test-key", server.URL).Stream(context.Background(), validRequest())
+	assertErrorKind(t, err, providerpkg.ErrorRateLimited)
+}
+
+func TestStreamRejectsUnexpectedContentType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	_, err := New(server.Client(), "test-key", server.URL).Stream(context.Background(), validRequest())
+	assertErrorKind(t, err, providerpkg.ErrorInternal)
+}
+
+func TestStreamTreatsPrematureEOFAsUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+	}))
+	defer server.Close()
+	stream, err := New(server.Client(), "test-key", server.URL).Stream(context.Background(), validRequest())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	assertErrorKind(t, err, providerpkg.ErrorUnavailable)
+}
+
+func TestStreamRespectsCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	stream, err := New(server.Client(), "test-key", server.URL).Stream(ctx, validRequest())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	assertErrorKind(t, err, providerpkg.ErrorTimeout)
 }
 
 func validRequest() common.ChatCompletionRequest {
