@@ -13,6 +13,25 @@ type Provider interface {
 	Complete(context.Context, openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error)
 }
 
+type StreamingProvider interface {
+	Provider
+	Stream(context.Context, openai.ChatCompletionRequest) (Stream, error)
+}
+
+type Stream interface {
+	Next() (StreamChunk, error)
+	Close() error
+}
+
+type StreamChunk struct {
+	ID           string
+	Created      int64
+	Model        string
+	Role         string
+	Content      string
+	FinishReason string
+}
+
 type ErrorKind string
 
 const (

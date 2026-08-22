@@ -34,6 +34,25 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+type ChatCompletionChunk struct {
+	ID      string        `json:"id"`
+	Object  string        `json:"object"`
+	Created int64         `json:"created"`
+	Model   string        `json:"model"`
+	Choices []ChunkChoice `json:"choices"`
+}
+
+type ChunkChoice struct {
+	Index        int        `json:"index"`
+	Delta        ChunkDelta `json:"delta"`
+	FinishReason *string    `json:"finish_reason"`
+}
+
+type ChunkDelta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
 type ErrorResponse struct {
 	Error APIError `json:"error"`
 }
