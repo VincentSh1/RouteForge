@@ -73,10 +73,10 @@ func buildService(cfg config.Config) (*gateway.Service, error) {
 	client := &http.Client{Timeout: cfg.ProviderTimeout}
 	providers := []provider.Provider{&mock.Provider{}}
 	if strings.TrimSpace(cfg.OpenAIAPIKey) != "" {
-		providers = append(providers, openaiadapter.New(client, cfg.OpenAIAPIKey, openaiadapter.DefaultBaseURL))
+		providers = append(providers, openaiadapter.New(client, cfg.OpenAIAPIKey, openaiadapter.DefaultBaseURL, cfg.StreamIdleTimeout))
 	}
 	if strings.TrimSpace(cfg.AnthropicAPIKey) != "" {
-		providers = append(providers, anthropic.New(client, cfg.AnthropicAPIKey, anthropic.DefaultBaseURL))
+		providers = append(providers, anthropic.New(client, cfg.AnthropicAPIKey, anthropic.DefaultBaseURL, cfg.StreamIdleTimeout))
 	}
 	registry := provider.NewRegistry(providers...)
 	resolver := model.New(map[string]map[string]string{

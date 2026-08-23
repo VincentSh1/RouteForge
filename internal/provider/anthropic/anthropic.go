@@ -24,13 +24,21 @@ const (
 )
 
 type Provider struct {
-	client  *http.Client
-	apiKey  string
-	baseURL string
+	client            *http.Client
+	streamClient      *http.Client
+	apiKey            string
+	baseURL           string
+	streamIdleTimeout time.Duration
 }
 
-func New(client *http.Client, apiKey, baseURL string) *Provider {
-	return &Provider{client: providerpkg.HTTPClientWithoutRedirects(client), apiKey: apiKey, baseURL: strings.TrimRight(baseURL, "/")}
+func New(client *http.Client, apiKey, baseURL string, streamIdleTimeout time.Duration) *Provider {
+	return &Provider{
+		client:            providerpkg.HTTPClientWithoutRedirects(client),
+		streamClient:      providerpkg.HTTPClientForStreaming(client),
+		apiKey:            apiKey,
+		baseURL:           strings.TrimRight(baseURL, "/"),
+		streamIdleTimeout: streamIdleTimeout,
+	}
 }
 
 func (p *Provider) Name() string { return Name }
@@ -90,24 +98,30 @@ func (p *Provider) Complete(ctx context.Context, req common.ChatCompletionReques
 }
 
 func (p *Provider) Stream(ctx context.Context, req common.ChatCompletionRequest) (providerpkg.Stream, error) {
-	upstreamReq, err := p.upstreamRequest(ctx, req, true)
+	streamCtx, watchdog := providerpkg.NewStreamIdleWatchdog(ctx, p.streamIdleTimeout)
+	upstreamReq, err := p.upstreamRequest(streamCtx, req, true)
 	if err != nil {
+		watchdog.Stop()
 		return nil, err
 	}
-	resp, err := p.client.Do(upstreamReq)
+	resp, err := p.streamClient.Do(upstreamReq)
 	if err != nil {
+		watchdog.Stop()
 		return nil, providerpkg.TransportError(Name, err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		_ = resp.Body.Close()
+		watchdog.Stop()
 		return nil, providerpkg.HTTPStatusError(Name, resp.StatusCode)
 	}
 	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil || mediaType != "text/event-stream" {
 		_ = resp.Body.Close()
+		watchdog.Stop()
 		return nil, providerpkg.NewError(providerpkg.ErrorInternal, Name, errors.New("unexpected upstream content type"))
 	}
-	return &stream{ctx: ctx, body: resp.Body, events: providerpkg.NewSSEReader(resp.Body)}, nil
+	body := watchdog.Wrap(resp.Body)
+	return &stream{ctx: streamCtx, body: body, events: providerpkg.NewSSEReader(body), watchdog: watchdog}, nil
 }
 
 func (p *Provider) upstreamRequest(ctx context.Context, req common.ChatCompletionRequest, stream bool) (*http.Request, error) {
@@ -142,6 +156,7 @@ type stream struct {
 	ctx      context.Context
 	body     io.ReadCloser
 	events   *providerpkg.SSEReader
+	watchdog *providerpkg.StreamIdleWatchdog
 	id       string
 	model    string
 	sentRole bool
@@ -220,7 +235,10 @@ func (s *stream) textChunk(content string) providerpkg.StreamChunk {
 	return chunk
 }
 
-func (s *stream) Close() error { return s.body.Close() }
+func (s *stream) Close() error {
+	s.watchdog.Stop()
+	return s.body.Close()
+}
 
 type request struct {
 	Model     string    `json:"model"`

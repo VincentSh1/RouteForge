@@ -42,7 +42,7 @@ func TestCompleteTranslatesRequestAndResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	p := New(server.Client(), "test-key", server.URL)
+	p := New(server.Client(), "test-key", server.URL, time.Second)
 	response, err := p.Complete(context.Background(), common.ChatCompletionRequest{
 		Model: "gpt-test",
 		Messages: []common.Message{
@@ -67,7 +67,7 @@ func TestCompleteRejectsMalformedResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := New(server.Client(), "test-key", server.URL).Complete(context.Background(), validRequest())
+	_, err := New(server.Client(), "test-key", server.URL, time.Second).Complete(context.Background(), validRequest())
 	assertErrorKind(t, err, providerpkg.ErrorInternal)
 }
 
@@ -87,7 +87,7 @@ func TestCompleteMapsStatus(t *testing.T) {
 			}))
 			defer server.Close()
 
-			_, err := New(server.Client(), "test-key", server.URL).Complete(context.Background(), validRequest())
+			_, err := New(server.Client(), "test-key", server.URL, time.Second).Complete(context.Background(), validRequest())
 			assertErrorKind(t, err, test.kind)
 			if err != nil && strings.Contains(err.Error(), "sensitive upstream detail") {
 				t.Fatal("upstream body leaked through error")
@@ -105,7 +105,7 @@ func TestCompleteRespectsContextDeadline(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
-	_, err := New(server.Client(), "test-key", server.URL).Complete(ctx, validRequest())
+	_, err := New(server.Client(), "test-key", server.URL, time.Second).Complete(ctx, validRequest())
 	assertErrorKind(t, err, providerpkg.ErrorTimeout)
 }
 
@@ -128,7 +128,7 @@ func TestStreamTranslatesIncrementalSSE(t *testing.T) {
 	}))
 	defer server.Close()
 
-	stream, err := New(server.Client(), "test-key", server.URL).Stream(context.Background(), validRequest())
+	stream, err := New(server.Client(), "test-key", server.URL, time.Second).Stream(context.Background(), validRequest())
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
@@ -161,7 +161,7 @@ func TestStreamRejectsMalformedAndOversizedEvents(t *testing.T) {
 				_, _ = w.Write([]byte("data: " + test.data + "\n\n"))
 			}))
 			defer server.Close()
-			stream, err := New(server.Client(), "test-key", server.URL).Stream(context.Background(), validRequest())
+			stream, err := New(server.Client(), "test-key", server.URL, time.Second).Stream(context.Background(), validRequest())
 			if err != nil {
 				t.Fatalf("Stream() error = %v", err)
 			}
@@ -178,7 +178,7 @@ func TestStreamMapsTransientStatus(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
-	_, err := New(server.Client(), "test-key", server.URL).Stream(context.Background(), validRequest())
+	_, err := New(server.Client(), "test-key", server.URL, time.Second).Stream(context.Background(), validRequest())
 	assertErrorKind(t, err, providerpkg.ErrorUnavailable)
 }
 
@@ -188,7 +188,7 @@ func TestStreamRejectsUnexpectedContentType(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
-	_, err := New(server.Client(), "test-key", server.URL).Stream(context.Background(), validRequest())
+	_, err := New(server.Client(), "test-key", server.URL, time.Second).Stream(context.Background(), validRequest())
 	assertErrorKind(t, err, providerpkg.ErrorInternal)
 }
 
@@ -197,7 +197,7 @@ func TestStreamTreatsPrematureEOFAsUnavailable(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 	}))
 	defer server.Close()
-	stream, err := New(server.Client(), "test-key", server.URL).Stream(context.Background(), validRequest())
+	stream, err := New(server.Client(), "test-key", server.URL, time.Second).Stream(context.Background(), validRequest())
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
@@ -215,13 +215,62 @@ func TestStreamRespectsCancellation(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
-	stream, err := New(server.Client(), "test-key", server.URL).Stream(ctx, validRequest())
+	stream, err := New(server.Client(), "test-key", server.URL, time.Second).Stream(ctx, validRequest())
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
 	_, err = stream.Next()
 	assertErrorKind(t, err, providerpkg.ErrorTimeout)
+}
+
+func TestStreamIdleTimeoutBeforeResponse(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	_, err := New(server.Client(), "test-key", server.URL, 25*time.Millisecond).Stream(context.Background(), validRequest())
+	assertErrorKind(t, err, providerpkg.ErrorTimeout)
+}
+
+func TestStreamActivityCanOutliveClientTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		for _, content := range []string{"one", "two", "three", "four"} {
+			time.Sleep(30 * time.Millisecond)
+			_, _ = w.Write([]byte("data: {\"id\":\"id\",\"created\":1,\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"" + content + "\"},\"finish_reason\":null}]}\n\n"))
+			w.(http.Flusher).Flush()
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := server.Client()
+	client.Timeout = 50 * time.Millisecond
+	stream, err := New(client, "test-key", server.URL, 100*time.Millisecond).Stream(context.Background(), validRequest())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	started := time.Now()
+	chunks := 0
+	for {
+		_, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		chunks++
+	}
+	if chunks != 4 || time.Since(started) <= client.Timeout {
+		t.Fatalf("chunks = %d, elapsed = %v", chunks, time.Since(started))
+	}
 }
 
 func validRequest() common.ChatCompletionRequest {
