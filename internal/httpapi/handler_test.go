@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/VincentSh1/RouteForge/internal/gateway"
@@ -63,7 +64,6 @@ func TestChatCompletionsValidationErrors(t *testing.T) {
 	}{
 		{name: "model", body: `{"messages":[{"role":"user","content":"Hello"}]}`, param: "model", code: "model_required"},
 		{name: "messages", body: `{"model":"model"}`, param: "messages", code: "messages_required"},
-		{name: "stream", body: `{"model":"model","messages":[{"role":"user"}],"stream":true}`, param: "stream", code: "unsupported_parameter"},
 		{name: "role", body: `{"model":"model","messages":[{"role":"tool"}]}`, param: "messages", code: "unsupported_value"},
 	}
 
@@ -83,6 +83,90 @@ func TestChatCompletionsValidationErrors(t *testing.T) {
 				t.Fatalf("unexpected error response: %+v", response)
 			}
 		})
+	}
+}
+
+func TestChatCompletionsStreamFalseReturnsJSON(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	testHandler(&mock.Provider{}).ServeHTTP(recorder, chatRequest(http.MethodPost, `{"model":"mock-model","messages":[{"role":"user"}],"stream":false}`))
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("status=%d content-type=%q", recorder.Code, recorder.Header().Get("Content-Type"))
+	}
+}
+
+func TestChatCompletionsStreamsSSE(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	testHandler(&mock.Provider{}).ServeHTTP(recorder, chatRequest(http.MethodPost, `{"model":"mock-model","messages":[{"role":"user"}],"stream":true}`))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	if recorder.Header().Get("Content-Type") != "text/event-stream" || recorder.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatalf("unexpected headers: %v", recorder.Header())
+	}
+	if !recorder.Flushed {
+		t.Fatal("stream was not flushed")
+	}
+	frames := strings.Split(strings.TrimSpace(recorder.Body.String()), "\n\n")
+	if len(frames) != 5 || frames[len(frames)-1] != "data: [DONE]" {
+		t.Fatalf("unexpected SSE frames: %q", frames)
+	}
+	var contents []string
+	for _, frame := range frames[:len(frames)-1] {
+		if !strings.HasPrefix(frame, "data: ") {
+			t.Fatalf("invalid frame = %q", frame)
+		}
+		var chunk openai.ChatCompletionChunk
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(frame, "data: ")), &chunk); err != nil {
+			t.Fatalf("decode chunk: %v", err)
+		}
+		if chunk.Object != "chat.completion.chunk" || chunk.Model != "mock-model" {
+			t.Fatalf("unexpected chunk: %+v", chunk)
+		}
+		if chunk.Choices[0].Delta.Content != "" {
+			contents = append(contents, chunk.Choices[0].Delta.Content)
+		}
+	}
+	if strings.Join(contents, "") != "Hello from RouteForge." {
+		t.Fatalf("streamed content = %q", strings.Join(contents, ""))
+	}
+}
+
+func TestStreamingValidationErrorRemainsJSON(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	testHandler(&mock.Provider{}).ServeHTTP(recorder, chatRequest(http.MethodPost, `{"messages":[{"role":"user"}],"stream":true}`))
+	if recorder.Code != http.StatusBadRequest || recorder.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("status=%d content-type=%q body=%s", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Body.String())
+	}
+}
+
+func TestStreamingAllProvidersFailBeforeCommitReturnsJSON(t *testing.T) {
+	first := &mock.Provider{StreamErr: providerpkg.NewError(providerpkg.ErrorUnavailable, "first", errors.New("first secret"))}
+	second := &mock.Provider{StreamErr: providerpkg.NewError(providerpkg.ErrorRateLimited, "second", errors.New("second secret"))}
+	resolver := model.New(map[string]map[string]string{model.General: {"mock": "mock-model"}})
+	handler := NewHandler(gateway.NewAuto(resolver, first, second)).Routes()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, chatRequest(http.MethodPost, `{"model":"routeforge/general","messages":[{"role":"user"}],"stream":true}`))
+	if recorder.Code != http.StatusTooManyRequests || recorder.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("status=%d content-type=%q", recorder.Code, recorder.Header().Get("Content-Type"))
+	}
+	if strings.Contains(recorder.Body.String(), "secret") {
+		t.Fatal("response exposed provider error")
+	}
+}
+
+func TestStreamingFailureAfterCommitTerminatesWithoutFallback(t *testing.T) {
+	first := &mock.Provider{
+		StreamChunks: []string{"partial"}, StreamErrAfter: 1,
+		StreamErr: providerpkg.NewError(providerpkg.ErrorUnavailable, "first", errors.New("secret")),
+	}
+	second := &mock.Provider{StreamChunks: []string{"wrong provider"}}
+	resolver := model.New(map[string]map[string]string{model.General: {"mock": "mock-model"}})
+	handler := NewHandler(gateway.NewAuto(resolver, first, second)).Routes()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, chatRequest(http.MethodPost, `{"model":"routeforge/general","messages":[{"role":"user"}],"stream":true}`))
+	body := recorder.Body.String()
+	if !strings.Contains(body, "partial") || strings.Contains(body, "wrong provider") || strings.Contains(body, "secret") || strings.Contains(body, "[DONE]") {
+		t.Fatalf("unexpected committed stream: %q", body)
 	}
 }
 

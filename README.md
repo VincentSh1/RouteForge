@@ -1,7 +1,7 @@
 # RouteForge
 
 RouteForge is an OpenAI-compatible AI inference gateway written in Go. It
-supports synchronous chat completions through mock, OpenAI, and Anthropic
+supports streaming and synchronous chat completions through mock, OpenAI, and Anthropic
 providers with explicit selection or deterministic fallback routing.
 
 ## API
@@ -9,11 +9,11 @@ providers with explicit selection or deterministic fallback routing.
 - `GET /health`
 - `POST /v1/chat/completions`
 - `system`, `user`, and `assistant` message roles
-- Non-streaming chat completions through a provider interface
+- Streaming and non-streaming chat completions through provider interfaces
 - OpenAI-style success and error responses
 
-Streaming, authentication, persistence, caching, rate limiting, scoring-based
-routing, and observability integrations are intentionally out of scope.
+Authentication, persistence, caching, rate limiting, scoring-based routing,
+and observability integrations are intentionally out of scope.
 
 ## Requirements
 
@@ -53,10 +53,41 @@ curl http://localhost:8080/v1/chat/completions \
   }'
 ```
 
-Omitting `stream` is equivalent to setting it to `false`; `stream: true`
-returns an OpenAI-style error because SSE is not implemented. Unknown JSON
-fields are ignored for client compatibility. Mock token usage values are zero
-and are not estimates.
+Omitting `stream` is equivalent to setting it to `false`. Unknown JSON fields
+are ignored for client compatibility. Mock token usage values are zero and are
+not estimates.
+
+## Streaming
+
+Set `stream` to `true` to receive OpenAI-compatible Server-Sent Events. The
+default mock provider requires no credentials:
+
+```sh
+curl -N http://localhost:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "routeforge/general",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": true
+  }'
+```
+
+The output contains incremental chunks and a completion marker:
+
+```text
+data: {..."content":"Hello"...}
+
+data: {..."content":" from"...}
+
+data: {..."content":" RouteForge."...}
+
+data: [DONE]
+```
+
+RouteForge may try another provider only before any stream content has been
+emitted to the client. Once the first SSE chunk is emitted, provider selection
+is committed for that response. A later provider failure terminates the stream
+without fallback or an error event.
 
 ## Provider selection
 
@@ -95,7 +126,8 @@ logical alias to the client.
 
 Auto mode requires a `routeforge/general` mapping for every configured
 provider. Explicit provider mode can omit the mapping when it only uses native
-model identifiers. Explicit mock mode supports native/mock names only.
+model identifiers. The built-in mock maps `routeforge/general` to `mock-model`
+for local testing.
 
 To test OpenAI locally, use a real key only in your shell environment:
 
@@ -118,7 +150,7 @@ go run ./cmd/routeforge
 Do not commit keys or `.env` files. Automated tests use local fake upstream
 servers and never make paid API calls.
 
-RouteForge has no authentication or rate limiting in Phase 2. Do not expose it
+RouteForge has no authentication or rate limiting. Do not expose it
 to public or untrusted networks. A deployment must explicitly configure
 `ROUTEFORGE_ADDR` to listen on a non-loopback interface.
 

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/VincentSh1/RouteForge/internal/model"
@@ -253,4 +254,133 @@ func testResolver() *model.Resolver {
 			"second":    "second-model",
 		},
 	})
+}
+
+type streamingTestProvider struct {
+	name        string
+	request     openai.ChatCompletionRequest
+	chunks      []provider.StreamChunk
+	err         error
+	errAfter    int
+	streamCalls int
+}
+
+func (p *streamingTestProvider) Name() string { return p.name }
+
+func (p *streamingTestProvider) Complete(context.Context, openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+	return openai.ChatCompletionResponse{}, nil
+}
+
+func (p *streamingTestProvider) Stream(ctx context.Context, req openai.ChatCompletionRequest) (provider.Stream, error) {
+	p.streamCalls++
+	p.request = req
+	if p.err != nil && p.errAfter == 0 {
+		return nil, p.err
+	}
+	return &testStream{ctx: ctx, chunks: p.chunks, err: p.err, errAfter: p.errAfter}, nil
+}
+
+type testStream struct {
+	ctx      context.Context
+	chunks   []provider.StreamChunk
+	err      error
+	errAfter int
+	index    int
+}
+
+func (s *testStream) Next() (provider.StreamChunk, error) {
+	if err := s.ctx.Err(); err != nil {
+		return provider.StreamChunk{}, err
+	}
+	if s.err != nil && s.index == s.errAfter {
+		return provider.StreamChunk{}, s.err
+	}
+	if s.index == len(s.chunks) {
+		return provider.StreamChunk{}, io.EOF
+	}
+	chunk := s.chunks[s.index]
+	s.index++
+	return chunk, nil
+}
+
+func (s *testStream) Close() error { return nil }
+
+func TestStreamFallsBackBeforeCommitAndResolvesOriginalModel(t *testing.T) {
+	first := &streamingTestProvider{name: "first", err: provider.NewError(provider.ErrorUnavailable, "first", errors.New("unavailable"))}
+	second := &streamingTestProvider{name: "second", chunks: []provider.StreamChunk{{Content: "hello", Model: "second-model"}}}
+	var emitted []provider.StreamChunk
+	err := NewAuto(testResolver(), first, second).Stream(context.Background(), streamRequest(), func(chunk provider.StreamChunk) error {
+		emitted = append(emitted, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if first.request.Model != "first-model" || second.request.Model != "second-model" {
+		t.Fatalf("resolved models = %q, %q", first.request.Model, second.request.Model)
+	}
+	if len(emitted) != 1 || emitted[0].Model != model.General {
+		t.Fatalf("emitted chunks = %+v", emitted)
+	}
+}
+
+func TestStreamDoesNotFallbackAfterCommit(t *testing.T) {
+	first := &streamingTestProvider{
+		name: "first", chunks: []provider.StreamChunk{{Content: "partial"}}, errAfter: 1,
+		err: provider.NewError(provider.ErrorUnavailable, "first", errors.New("failed")),
+	}
+	second := &streamingTestProvider{name: "second", chunks: []provider.StreamChunk{{Content: "wrong"}}}
+	emitted := 0
+	err := NewAuto(testResolver(), first, second).Stream(context.Background(), streamRequest(), func(provider.StreamChunk) error {
+		emitted++
+		return nil
+	})
+	if err == nil || emitted != 1 || second.streamCalls != 0 {
+		t.Fatalf("error=%v emitted=%d second calls=%d", err, emitted, second.streamCalls)
+	}
+}
+
+func TestStreamDoesNotFallbackAfterInvalidRequest(t *testing.T) {
+	first := &streamingTestProvider{name: "first", err: provider.NewError(provider.ErrorInvalidRequest, "first", errors.New("invalid"))}
+	second := &streamingTestProvider{name: "second"}
+	err := NewAuto(testResolver(), first, second).Stream(context.Background(), streamRequest(), func(provider.StreamChunk) error { return nil })
+	if err == nil || second.streamCalls != 0 {
+		t.Fatalf("error=%v second calls=%d", err, second.streamCalls)
+	}
+}
+
+func TestStreamSuccessfulFirstProviderDoesNotFallback(t *testing.T) {
+	first := &streamingTestProvider{name: "first", chunks: []provider.StreamChunk{{Content: "done"}}}
+	second := &streamingTestProvider{name: "second"}
+	err := NewAuto(testResolver(), first, second).Stream(context.Background(), streamRequest(), func(provider.StreamChunk) error { return nil })
+	if err != nil || first.streamCalls != 1 || second.streamCalls != 0 {
+		t.Fatalf("error=%v calls=%d,%d", err, first.streamCalls, second.streamCalls)
+	}
+}
+
+func TestStreamAllProvidersFailBeforeCommit(t *testing.T) {
+	first := &streamingTestProvider{name: "first", err: provider.NewError(provider.ErrorUnavailable, "first", errors.New("first"))}
+	secondErr := provider.NewError(provider.ErrorRateLimited, "second", errors.New("second"))
+	second := &streamingTestProvider{name: "second", err: secondErr}
+	err := NewAuto(testResolver(), first, second).Stream(context.Background(), streamRequest(), func(provider.StreamChunk) error { return nil })
+	if !errors.Is(err, secondErr) || first.streamCalls != 1 || second.streamCalls != 1 {
+		t.Fatalf("error=%v calls=%d,%d", err, first.streamCalls, second.streamCalls)
+	}
+}
+
+func TestStreamCancellationStopsFallback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	first := &streamingTestProvider{name: "first", err: provider.NewError(provider.ErrorTimeout, "first", context.Canceled)}
+	second := &streamingTestProvider{name: "second"}
+	_ = NewAuto(testResolver(), first, second).Stream(ctx, streamRequest(), func(provider.StreamChunk) error { return nil })
+	if second.streamCalls != 0 {
+		t.Fatalf("second calls = %d", second.streamCalls)
+	}
+}
+
+func streamRequest() openai.ChatCompletionRequest {
+	req := validRequest()
+	req.Stream = true
+	return req
 }

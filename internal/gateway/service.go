@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/VincentSh1/RouteForge/internal/model"
@@ -50,21 +51,14 @@ func NewAuto(resolver *model.Resolver, providers ...provider.Provider) *Service 
 }
 
 func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
-	if strings.TrimSpace(req.Model) == "" {
-		return openai.ChatCompletionResponse{}, ErrModelRequired
-	}
-	if len(req.Messages) == 0 {
-		return openai.ChatCompletionResponse{}, ErrMessagesRequired
+	if err := validateCore(req); err != nil {
+		return openai.ChatCompletionResponse{}, err
 	}
 	if req.Stream {
 		return openai.ChatCompletionResponse{}, ErrStreamingUnsupported
 	}
-	for i, message := range req.Messages {
-		switch message.Role {
-		case "system", "user", "assistant":
-		default:
-			return openai.ChatCompletionResponse{}, &UnsupportedRoleError{Index: i, Role: message.Role}
-		}
+	if err := validateRoles(req); err != nil {
+		return openai.ChatCompletionResponse{}, err
 	}
 
 	if len(s.providers) == 0 {
@@ -107,6 +101,103 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 		return openai.ChatCompletionResponse{}, ErrNoUsableModelMapping
 	}
 	return openai.ChatCompletionResponse{}, lastErr
+}
+
+type EmitFunc func(provider.StreamChunk) error
+
+func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, emit EmitFunc) error {
+	if err := validateCore(req); err != nil {
+		return err
+	}
+	if err := validateRoles(req); err != nil {
+		return err
+	}
+	if len(s.providers) == 0 {
+		return ErrNoProviders
+	}
+	logicalModel := model.IsLogical(req.Model)
+	if s.fallback && !logicalModel {
+		return ErrNativeModelInAuto
+	}
+
+	var lastErr error
+	attempted := false
+	for _, item := range s.providers {
+		providerRequest := req
+		if logicalModel {
+			resolved, err := s.resolver.Resolve(req.Model, item.Name())
+			if err != nil {
+				if s.fallback && isMissingMapping(err) {
+					continue
+				}
+				return err
+			}
+			providerRequest.Model = resolved
+		}
+
+		streamingProvider, ok := item.(provider.StreamingProvider)
+		if !ok {
+			return provider.NewError(provider.ErrorInternal, item.Name(), errors.New("streaming is unavailable"))
+		}
+		attempted = true
+		stream, err := streamingProvider.Stream(ctx, providerRequest)
+		if err != nil {
+			lastErr = err
+			if !s.fallback || ctx.Err() != nil || !eligibleForFallback(err) {
+				return err
+			}
+			continue
+		}
+
+		committed := false
+		for {
+			chunk, err := stream.Next()
+			if err != nil {
+				_ = stream.Close()
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+				lastErr = err
+				if !committed && s.fallback && ctx.Err() == nil && eligibleForFallback(err) {
+					break
+				}
+				return err
+			}
+			if logicalModel {
+				chunk.Model = req.Model
+			}
+			if err := emit(chunk); err != nil {
+				_ = stream.Close()
+				return err
+			}
+			committed = true
+		}
+	}
+	if !attempted {
+		return ErrNoUsableModelMapping
+	}
+	return lastErr
+}
+
+func validateCore(req openai.ChatCompletionRequest) error {
+	if strings.TrimSpace(req.Model) == "" {
+		return ErrModelRequired
+	}
+	if len(req.Messages) == 0 {
+		return ErrMessagesRequired
+	}
+	return nil
+}
+
+func validateRoles(req openai.ChatCompletionRequest) error {
+	for i, message := range req.Messages {
+		switch message.Role {
+		case "system", "user", "assistant":
+		default:
+			return &UnsupportedRoleError{Index: i, Role: message.Role}
+		}
+	}
+	return nil
 }
 
 func isMissingMapping(err error) bool {
