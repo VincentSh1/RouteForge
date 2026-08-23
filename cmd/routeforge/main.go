@@ -83,6 +83,7 @@ func buildService(cfg config.Config) (*gateway.Service, error) {
 		model.General: {
 			openaiadapter.Name: cfg.GeneralOpenAIModel,
 			anthropic.Name:     cfg.GeneralAnthropicModel,
+			mock.Name:          "mock-model",
 		},
 	})
 
