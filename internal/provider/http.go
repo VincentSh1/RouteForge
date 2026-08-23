@@ -20,6 +20,12 @@ func HTTPClientWithoutRedirects(client *http.Client) *http.Client {
 	return &cloned
 }
 
+func HTTPClientForStreaming(client *http.Client) *http.Client {
+	cloned := HTTPClientWithoutRedirects(client)
+	cloned.Timeout = 0
+	return cloned
+}
+
 func ReadResponse(body io.Reader, limit int64) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(body, limit+1))
 	if err != nil {

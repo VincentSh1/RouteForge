@@ -61,7 +61,7 @@ func (r *SSEReader) Next() (SSEEvent, error) {
 		return SSEEvent{}, ErrSSERead
 	}
 	if len(r.event.Data) > 0 || r.event.Type != "" {
-		return r.takeEvent(), nil
+		return SSEEvent{}, ErrSSERead
 	}
 	return SSEEvent{}, io.EOF
 }

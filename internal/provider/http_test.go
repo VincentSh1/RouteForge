@@ -22,3 +22,14 @@ func TestHTTPClientWithoutRedirectsPreservesSettings(t *testing.T) {
 		t.Fatalf("redirect error = %v, want http.ErrUseLastResponse", err)
 	}
 }
+
+func TestHTTPClientForStreamingDisablesTotalTimeout(t *testing.T) {
+	original := &http.Client{Timeout: 3 * time.Second}
+	client := HTTPClientForStreaming(original)
+	if client.Timeout != 0 {
+		t.Fatalf("Timeout = %v, want 0", client.Timeout)
+	}
+	if original.Timeout != 3*time.Second {
+		t.Fatalf("original Timeout = %v", original.Timeout)
+	}
+}
