@@ -15,6 +15,7 @@ func TestLoadDefaults(t *testing.T) {
 		"ROUTEFORGE_IDLE_TIMEOUT",
 		"ROUTEFORGE_SHUTDOWN_TIMEOUT",
 		"ROUTEFORGE_PROVIDER_TIMEOUT",
+		"ROUTEFORGE_STREAM_IDLE_TIMEOUT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -30,7 +31,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ReadTimeout != 15*time.Second || cfg.WriteTimeout != 30*time.Second {
 		t.Fatal("unexpected default timeouts")
 	}
-	if cfg.Provider != ProviderMock || cfg.ProviderTimeout != 30*time.Second {
+	if cfg.Provider != ProviderMock || cfg.ProviderTimeout != 30*time.Second || cfg.StreamIdleTimeout != 30*time.Second {
 		t.Fatal("unexpected provider defaults")
 	}
 }
@@ -43,12 +44,13 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("ROUTEFORGE_IDLE_TIMEOUT", "4s")
 	t.Setenv("ROUTEFORGE_SHUTDOWN_TIMEOUT", "5s")
 	t.Setenv("ROUTEFORGE_PROVIDER_TIMEOUT", "6s")
+	t.Setenv("ROUTEFORGE_STREAM_IDLE_TIMEOUT", "7s")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Addr != "127.0.0.1:9090" || cfg.ReadTimeout != 2*time.Second || cfg.ShutdownTimeout != 5*time.Second || cfg.ProviderTimeout != 6*time.Second {
+	if cfg.Addr != "127.0.0.1:9090" || cfg.ReadTimeout != 2*time.Second || cfg.ShutdownTimeout != 5*time.Second || cfg.ProviderTimeout != 6*time.Second || cfg.StreamIdleTimeout != 7*time.Second {
 		t.Fatal("unexpected configuration")
 	}
 }
@@ -58,6 +60,18 @@ func TestLoadRejectsInvalidDuration(t *testing.T) {
 	t.Setenv("ROUTEFORGE_READ_TIMEOUT", "never")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error")
+	}
+}
+
+func TestLoadRejectsInvalidStreamIdleTimeout(t *testing.T) {
+	for _, value := range []string{"0s", "never"} {
+		t.Run(value, func(t *testing.T) {
+			setProviderDefaults(t)
+			t.Setenv("ROUTEFORGE_STREAM_IDLE_TIMEOUT", value)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want an error")
+			}
+		})
 	}
 }
 

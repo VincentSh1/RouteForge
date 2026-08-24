@@ -1,7 +1,6 @@
 package openai
 
-// ChatCompletionRequest is the OpenAI-compatible request subset supported by
-// RouteForge in Phase 1.
+// ChatCompletionRequest is the OpenAI-compatible request subset RouteForge supports.
 type ChatCompletionRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`

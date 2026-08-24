@@ -157,7 +157,7 @@ func TestStreamingAllProvidersFailBeforeCommitReturnsJSON(t *testing.T) {
 func TestStreamingFailureAfterCommitTerminatesWithoutFallback(t *testing.T) {
 	first := &mock.Provider{
 		StreamChunks: []string{"partial"}, StreamErrAfter: 1,
-		StreamErr: providerpkg.NewError(providerpkg.ErrorUnavailable, "first", errors.New("secret")),
+		StreamErr: providerpkg.NewError(providerpkg.ErrorTimeout, "first", errors.New("secret timeout detail")),
 	}
 	second := &mock.Provider{StreamChunks: []string{"wrong provider"}}
 	resolver := model.New(map[string]map[string]string{model.General: {"mock": "mock-model"}})

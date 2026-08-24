@@ -324,10 +324,23 @@ func TestStreamFallsBackBeforeCommitAndResolvesOriginalModel(t *testing.T) {
 	}
 }
 
+func TestStreamFallsBackAfterIdleTimeoutBeforeCommit(t *testing.T) {
+	first := &streamingTestProvider{name: "first", err: provider.NewError(provider.ErrorTimeout, "first", errors.New("idle timeout"))}
+	second := &streamingTestProvider{name: "second", chunks: []provider.StreamChunk{{Content: "fallback"}}}
+	emitted := 0
+	err := NewAuto(testResolver(), first, second).Stream(context.Background(), streamRequest(), func(provider.StreamChunk) error {
+		emitted++
+		return nil
+	})
+	if err != nil || emitted != 1 || first.streamCalls != 1 || second.streamCalls != 1 {
+		t.Fatalf("error=%v emitted=%d calls=%d,%d", err, emitted, first.streamCalls, second.streamCalls)
+	}
+}
+
 func TestStreamDoesNotFallbackAfterCommit(t *testing.T) {
 	first := &streamingTestProvider{
 		name: "first", chunks: []provider.StreamChunk{{Content: "partial"}}, errAfter: 1,
-		err: provider.NewError(provider.ErrorUnavailable, "first", errors.New("failed")),
+		err: provider.NewError(provider.ErrorTimeout, "first", errors.New("idle timeout")),
 	}
 	second := &streamingTestProvider{name: "second", chunks: []provider.StreamChunk{{Content: "wrong"}}}
 	emitted := 0

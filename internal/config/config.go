@@ -8,13 +8,14 @@ import (
 )
 
 const (
-	defaultAddr            = "127.0.0.1:8080"
-	defaultReadTimeout     = 15 * time.Second
-	defaultWriteTimeout    = 30 * time.Second
-	defaultIdleTimeout     = 60 * time.Second
-	defaultShutdownTimeout = 10 * time.Second
-	defaultProviderTimeout = 30 * time.Second
-	defaultProvider        = "mock"
+	defaultAddr              = "127.0.0.1:8080"
+	defaultReadTimeout       = 15 * time.Second
+	defaultWriteTimeout      = 30 * time.Second
+	defaultIdleTimeout       = 60 * time.Second
+	defaultShutdownTimeout   = 10 * time.Second
+	defaultProviderTimeout   = 30 * time.Second
+	defaultStreamIdleTimeout = 30 * time.Second
+	defaultProvider          = "mock"
 )
 
 const (
@@ -31,6 +32,7 @@ type Config struct {
 	IdleTimeout           time.Duration
 	ShutdownTimeout       time.Duration
 	ProviderTimeout       time.Duration
+	StreamIdleTimeout     time.Duration
 	Provider              string
 	OpenAIAPIKey          string
 	AnthropicAPIKey       string
@@ -52,6 +54,7 @@ func Load() (Config, error) {
 		IdleTimeout:           defaultIdleTimeout,
 		ShutdownTimeout:       defaultShutdownTimeout,
 		ProviderTimeout:       defaultProviderTimeout,
+		StreamIdleTimeout:     defaultStreamIdleTimeout,
 		Provider:              strings.ToLower(strings.TrimSpace(envOrDefault("ROUTEFORGE_PROVIDER", defaultProvider))),
 		OpenAIAPIKey:          os.Getenv("OPENAI_API_KEY"),
 		AnthropicAPIKey:       os.Getenv("ANTHROPIC_API_KEY"),
@@ -68,6 +71,7 @@ func Load() (Config, error) {
 		{"ROUTEFORGE_IDLE_TIMEOUT", &cfg.IdleTimeout},
 		{"ROUTEFORGE_SHUTDOWN_TIMEOUT", &cfg.ShutdownTimeout},
 		{"ROUTEFORGE_PROVIDER_TIMEOUT", &cfg.ProviderTimeout},
+		{"ROUTEFORGE_STREAM_IDLE_TIMEOUT", &cfg.StreamIdleTimeout},
 	}
 	for _, value := range values {
 		raw := os.Getenv(value.key)
