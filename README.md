@@ -36,6 +36,7 @@ environment variables:
 | `ROUTEFORGE_IDLE_TIMEOUT` | `60s` |
 | `ROUTEFORGE_SHUTDOWN_TIMEOUT` | `10s` |
 | `ROUTEFORGE_PROVIDER_TIMEOUT` | `30s` |
+| `ROUTEFORGE_STREAM_IDLE_TIMEOUT` | `30s` |
 | `ROUTEFORGE_PROVIDER` | `mock` |
 | `OPENAI_API_KEY` | unset |
 | `ANTHROPIC_API_KEY` | unset |
@@ -88,6 +89,12 @@ RouteForge may try another provider only before any stream content has been
 emitted to the client. Once the first SSE chunk is emitted, provider selection
 is committed for that response. A later provider failure terminates the stream
 without fallback or an error event.
+
+`ROUTEFORGE_PROVIDER_TIMEOUT` continues to bound synchronous provider calls.
+Streaming calls are not limited to that total duration. Instead,
+`ROUTEFORGE_STREAM_IDLE_TIMEOUT` cancels an upstream stream when no response
+data arrives for the configured duration; each read of upstream stream data
+resets the inactivity timer.
 
 ## Provider selection
 
