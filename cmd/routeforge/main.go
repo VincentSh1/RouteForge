@@ -86,13 +86,17 @@ func buildService(cfg config.Config) (*gateway.Service, error) {
 			mock.Name:          "mock-model",
 		},
 	})
+	circuitConfig := gateway.CircuitConfig{
+		FailureThreshold: cfg.CircuitFailureThreshold,
+		OpenDuration:     cfg.CircuitOpenDuration,
+	}
 
 	if cfg.Provider != config.ProviderAuto {
 		selected, ok := registry.Get(cfg.Provider)
 		if !ok {
 			return nil, fmt.Errorf("configured provider is unavailable")
 		}
-		return gateway.New(selected, resolver), nil
+		return gateway.NewWithCircuitBreaker(selected, resolver, circuitConfig), nil
 	}
 
 	orderedNames := []string{openaiadapter.Name, anthropic.Name}
@@ -105,5 +109,5 @@ func buildService(cfg config.Config) (*gateway.Service, error) {
 	if len(ordered) == 0 {
 		return nil, fmt.Errorf("no automatic providers are configured")
 	}
-	return gateway.NewAuto(resolver, ordered...), nil
+	return gateway.NewAutoWithCircuitBreaker(resolver, circuitConfig, ordered...), nil
 }
