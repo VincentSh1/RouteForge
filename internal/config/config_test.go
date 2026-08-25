@@ -16,6 +16,8 @@ func TestLoadDefaults(t *testing.T) {
 		"ROUTEFORGE_SHUTDOWN_TIMEOUT",
 		"ROUTEFORGE_PROVIDER_TIMEOUT",
 		"ROUTEFORGE_STREAM_IDLE_TIMEOUT",
+		"ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD",
+		"ROUTEFORGE_CIRCUIT_OPEN_DURATION",
 	} {
 		t.Setenv(key, "")
 	}
@@ -34,6 +36,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Provider != ProviderMock || cfg.ProviderTimeout != 30*time.Second || cfg.StreamIdleTimeout != 30*time.Second {
 		t.Fatal("unexpected provider defaults")
 	}
+	if cfg.CircuitFailureThreshold != 3 || cfg.CircuitOpenDuration != 30*time.Second {
+		t.Fatal("unexpected circuit breaker defaults")
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -45,6 +50,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("ROUTEFORGE_SHUTDOWN_TIMEOUT", "5s")
 	t.Setenv("ROUTEFORGE_PROVIDER_TIMEOUT", "6s")
 	t.Setenv("ROUTEFORGE_STREAM_IDLE_TIMEOUT", "7s")
+	t.Setenv("ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD", "4")
+	t.Setenv("ROUTEFORGE_CIRCUIT_OPEN_DURATION", "8s")
 
 	cfg, err := Load()
 	if err != nil {
@@ -52,6 +59,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.Addr != "127.0.0.1:9090" || cfg.ReadTimeout != 2*time.Second || cfg.ShutdownTimeout != 5*time.Second || cfg.ProviderTimeout != 6*time.Second || cfg.StreamIdleTimeout != 7*time.Second {
 		t.Fatal("unexpected configuration")
+	}
+	if cfg.CircuitFailureThreshold != 4 || cfg.CircuitOpenDuration != 8*time.Second {
+		t.Fatal("unexpected circuit breaker configuration")
 	}
 }
 
@@ -68,6 +78,26 @@ func TestLoadRejectsInvalidStreamIdleTimeout(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			setProviderDefaults(t)
 			t.Setenv("ROUTEFORGE_STREAM_IDLE_TIMEOUT", value)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want an error")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidCircuitBreakerConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		key   string
+		value string
+	}{
+		{key: "ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD", value: "0"},
+		{key: "ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD", value: "many"},
+		{key: "ROUTEFORGE_CIRCUIT_OPEN_DURATION", value: "0s"},
+		{key: "ROUTEFORGE_CIRCUIT_OPEN_DURATION", value: "later"},
+	} {
+		t.Run(test.key+"="+test.value, func(t *testing.T) {
+			setProviderDefaults(t)
+			t.Setenv(test.key, test.value)
 			if _, err := Load(); err == nil {
 				t.Fatal("Load() error = nil, want an error")
 			}
@@ -128,4 +158,6 @@ func setProviderDefaults(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("ROUTEFORGE_MODEL_GENERAL_OPENAI", "")
 	t.Setenv("ROUTEFORGE_MODEL_GENERAL_ANTHROPIC", "")
+	t.Setenv("ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD", "")
+	t.Setenv("ROUTEFORGE_CIRCUIT_OPEN_DURATION", "")
 }

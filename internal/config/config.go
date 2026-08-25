@@ -3,19 +3,22 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	defaultAddr              = "127.0.0.1:8080"
-	defaultReadTimeout       = 15 * time.Second
-	defaultWriteTimeout      = 30 * time.Second
-	defaultIdleTimeout       = 60 * time.Second
-	defaultShutdownTimeout   = 10 * time.Second
-	defaultProviderTimeout   = 30 * time.Second
-	defaultStreamIdleTimeout = 30 * time.Second
-	defaultProvider          = "mock"
+	defaultAddr                    = "127.0.0.1:8080"
+	defaultReadTimeout             = 15 * time.Second
+	defaultWriteTimeout            = 30 * time.Second
+	defaultIdleTimeout             = 60 * time.Second
+	defaultShutdownTimeout         = 10 * time.Second
+	defaultProviderTimeout         = 30 * time.Second
+	defaultStreamIdleTimeout       = 30 * time.Second
+	defaultCircuitOpenDuration     = 30 * time.Second
+	defaultCircuitFailureThreshold = 3
+	defaultProvider                = "mock"
 )
 
 const (
@@ -26,18 +29,20 @@ const (
 )
 
 type Config struct {
-	Addr                  string
-	ReadTimeout           time.Duration
-	WriteTimeout          time.Duration
-	IdleTimeout           time.Duration
-	ShutdownTimeout       time.Duration
-	ProviderTimeout       time.Duration
-	StreamIdleTimeout     time.Duration
-	Provider              string
-	OpenAIAPIKey          string
-	AnthropicAPIKey       string
-	GeneralOpenAIModel    string
-	GeneralAnthropicModel string
+	Addr                    string
+	ReadTimeout             time.Duration
+	WriteTimeout            time.Duration
+	IdleTimeout             time.Duration
+	ShutdownTimeout         time.Duration
+	ProviderTimeout         time.Duration
+	StreamIdleTimeout       time.Duration
+	CircuitFailureThreshold int
+	CircuitOpenDuration     time.Duration
+	Provider                string
+	OpenAIAPIKey            string
+	AnthropicAPIKey         string
+	GeneralOpenAIModel      string
+	GeneralAnthropicModel   string
 }
 
 type ValidationError struct {
@@ -48,18 +53,20 @@ func (e *ValidationError) Error() string { return e.Message }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Addr:                  envOrDefault("ROUTEFORGE_ADDR", defaultAddr),
-		ReadTimeout:           defaultReadTimeout,
-		WriteTimeout:          defaultWriteTimeout,
-		IdleTimeout:           defaultIdleTimeout,
-		ShutdownTimeout:       defaultShutdownTimeout,
-		ProviderTimeout:       defaultProviderTimeout,
-		StreamIdleTimeout:     defaultStreamIdleTimeout,
-		Provider:              strings.ToLower(strings.TrimSpace(envOrDefault("ROUTEFORGE_PROVIDER", defaultProvider))),
-		OpenAIAPIKey:          os.Getenv("OPENAI_API_KEY"),
-		AnthropicAPIKey:       os.Getenv("ANTHROPIC_API_KEY"),
-		GeneralOpenAIModel:    strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_OPENAI")),
-		GeneralAnthropicModel: strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_ANTHROPIC")),
+		Addr:                    envOrDefault("ROUTEFORGE_ADDR", defaultAddr),
+		ReadTimeout:             defaultReadTimeout,
+		WriteTimeout:            defaultWriteTimeout,
+		IdleTimeout:             defaultIdleTimeout,
+		ShutdownTimeout:         defaultShutdownTimeout,
+		ProviderTimeout:         defaultProviderTimeout,
+		StreamIdleTimeout:       defaultStreamIdleTimeout,
+		CircuitFailureThreshold: defaultCircuitFailureThreshold,
+		CircuitOpenDuration:     defaultCircuitOpenDuration,
+		Provider:                strings.ToLower(strings.TrimSpace(envOrDefault("ROUTEFORGE_PROVIDER", defaultProvider))),
+		OpenAIAPIKey:            os.Getenv("OPENAI_API_KEY"),
+		AnthropicAPIKey:         os.Getenv("ANTHROPIC_API_KEY"),
+		GeneralOpenAIModel:      strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_OPENAI")),
+		GeneralAnthropicModel:   strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_ANTHROPIC")),
 	}
 
 	values := []struct {
@@ -72,6 +79,14 @@ func Load() (Config, error) {
 		{"ROUTEFORGE_SHUTDOWN_TIMEOUT", &cfg.ShutdownTimeout},
 		{"ROUTEFORGE_PROVIDER_TIMEOUT", &cfg.ProviderTimeout},
 		{"ROUTEFORGE_STREAM_IDLE_TIMEOUT", &cfg.StreamIdleTimeout},
+		{"ROUTEFORGE_CIRCUIT_OPEN_DURATION", &cfg.CircuitOpenDuration},
+	}
+	if raw := os.Getenv("ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD"); raw != "" {
+		threshold, err := strconv.Atoi(raw)
+		if err != nil || threshold <= 0 {
+			return Config{}, validationError("ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD must be a positive integer")
+		}
+		cfg.CircuitFailureThreshold = threshold
 	}
 	for _, value := range values {
 		raw := os.Getenv(value.key)
