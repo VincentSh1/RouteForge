@@ -2,12 +2,14 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/VincentSh1/RouteForge/internal/gateway"
 	"github.com/VincentSh1/RouteForge/internal/model"
@@ -208,6 +210,46 @@ func TestChatCompletionsSanitizesFinalFallbackError(t *testing.T) {
 	if bytes.Contains(recorder.Body.Bytes(), []byte("secret")) {
 		t.Fatal("response exposed a raw fallback error")
 	}
+}
+
+func TestChatCompletionsSanitizesOpenCircuitError(t *testing.T) {
+	first := &namedUnavailableProvider{name: "first"}
+	second := &namedUnavailableProvider{name: "second"}
+	resolver := model.New(map[string]map[string]string{model.General: {
+		"first": "first-model", "second": "second-model",
+	}})
+	service := gateway.NewAutoWithCircuitBreaker(resolver, gateway.CircuitConfig{
+		FailureThreshold: 1,
+		OpenDuration:     time.Hour,
+	}, first, second)
+	handler := NewHandler(service).Routes()
+	body := `{"model":"routeforge/general","messages":[{"role":"user"}]}`
+
+	handler.ServeHTTP(httptest.NewRecorder(), chatRequest(http.MethodPost, body))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, chatRequest(http.MethodPost, body))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	responseBody := recorder.Body.String()
+	if strings.Contains(responseBody, "circuit") || strings.Contains(responseBody, "first") || strings.Contains(responseBody, "second") {
+		t.Fatalf("response exposed circuit internals: %q", responseBody)
+	}
+	if first.calls != 1 || second.calls != 1 {
+		t.Fatalf("open providers were called: %d,%d", first.calls, second.calls)
+	}
+}
+
+type namedUnavailableProvider struct {
+	name  string
+	calls int
+}
+
+func (p *namedUnavailableProvider) Name() string { return p.name }
+
+func (p *namedUnavailableProvider) Complete(context.Context, openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+	p.calls++
+	return openai.ChatCompletionResponse{}, providerpkg.NewError(providerpkg.ErrorUnavailable, p.name, errors.New("private upstream detail"))
 }
 
 func TestChatCompletionsMapsModelResolutionErrors(t *testing.T) {

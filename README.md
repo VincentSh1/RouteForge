@@ -37,6 +37,8 @@ environment variables:
 | `ROUTEFORGE_SHUTDOWN_TIMEOUT` | `10s` |
 | `ROUTEFORGE_PROVIDER_TIMEOUT` | `30s` |
 | `ROUTEFORGE_STREAM_IDLE_TIMEOUT` | `30s` |
+| `ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD` | `3` |
+| `ROUTEFORGE_CIRCUIT_OPEN_DURATION` | `30s` |
 | `ROUTEFORGE_PROVIDER` | `mock` |
 | `OPENAI_API_KEY` | unset |
 | `ANTHROPIC_API_KEY` | unset |
@@ -108,6 +110,29 @@ configured real provider at most once, in this fixed order:
 Auto mode falls back only after rate limiting, timeout, or temporary
 unavailability. It does not fall back after an invalid request, and it never
 falls back to the mock provider.
+
+## Passive provider health
+
+RouteForge tracks short-term provider reliability in memory. Timeouts,
+temporary unavailability, upstream 5xx responses, and rate limiting count
+toward `ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD`. Invalid requests, model
+resolution errors, adapter-internal errors, and client cancellation do not.
+
+A provider circuit begins `CLOSED`. Reaching the failure threshold moves it to
+`OPEN` for `ROUTEFORGE_CIRCUIT_OPEN_DURATION`. After that cooldown, one request
+is admitted as a `HALF_OPEN` trial. A successful completion closes the circuit;
+a relevant failure opens it again. Concurrent requests cannot all become
+half-open trials.
+
+Auto routing skips open providers while retaining its configured provider
+order. Explicit selection never falls back to another provider: it fails fast
+while the selected provider is open, although an explicit request may claim
+the available half-open trial after cooldown. Streaming success is recorded
+only after the provider's normal completion marker. Failures after stream
+commitment still affect health but never trigger fallback for that response.
+
+Health state is local to the RouteForge process and resets on restart. There
+are no background probes or distributed circuit coordination in this phase.
 
 ## Model resolution
 
