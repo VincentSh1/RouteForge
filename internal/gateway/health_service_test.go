@@ -42,7 +42,7 @@ func TestClientCancellationDoesNotDegradeProviderHealth(t *testing.T) {
 	attempt, _ := service.health.begin("first")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	recordHealthOutcome(attempt, ctx, provider.NewError(provider.ErrorTimeout, "first", context.Canceled))
+	recordHealthOutcome(attempt, classifyProviderOutcome(ctx, provider.NewError(provider.ErrorTimeout, "first", context.Canceled)))
 	assertProviderHealth(t, service, "first", circuitClosed, 0)
 }
 

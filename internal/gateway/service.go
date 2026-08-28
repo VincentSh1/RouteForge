@@ -42,6 +42,7 @@ type Service struct {
 	resolver  *model.Resolver
 	fallback  bool
 	health    *healthTracker
+	telemetry *telemetryTracker
 }
 
 func New(p provider.Provider, resolver *model.Resolver) *Service {
@@ -56,7 +57,12 @@ func NewWithCircuitBreaker(p provider.Provider, resolver *model.Resolver, config
 		resolver = model.New(nil)
 	}
 	providers := []provider.Provider{p}
-	return &Service{providers: providers, resolver: resolver, health: trackerFor(providers, config)}
+	return &Service{
+		providers: providers,
+		resolver:  resolver,
+		health:    trackerFor(providers, config),
+		telemetry: telemetryFor(providers),
+	}
 }
 
 func NewAuto(resolver *model.Resolver, providers ...provider.Provider) *Service {
@@ -70,7 +76,13 @@ func NewAutoWithCircuitBreaker(resolver *model.Resolver, config CircuitConfig, p
 	if resolver == nil {
 		resolver = model.New(nil)
 	}
-	return &Service{providers: providers, resolver: resolver, fallback: true, health: trackerFor(providers, config)}
+	return &Service{
+		providers: providers,
+		resolver:  resolver,
+		fallback:  true,
+		health:    trackerFor(providers, config),
+		telemetry: telemetryFor(providers),
+	}
 }
 
 func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
@@ -119,8 +131,11 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 		}
 
 		attempted = true
+		telemetryAttempt := s.telemetry.begin(item.Name())
 		response, err := item.Complete(ctx, providerRequest)
-		recordHealthOutcome(healthAttempt, ctx, err)
+		outcome := classifyProviderOutcome(ctx, err)
+		recordHealthOutcome(healthAttempt, outcome)
+		telemetryAttempt.finishNonStreaming(outcome)
 		if err == nil {
 			if logicalModel {
 				response.Model = req.Model
@@ -188,9 +203,12 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 			continue
 		}
 		attempted = true
+		telemetryAttempt := s.telemetry.begin(item.Name())
 		stream, err := streamingProvider.Stream(ctx, providerRequest)
 		if err != nil {
-			recordHealthOutcome(healthAttempt, ctx, err)
+			outcome := classifyProviderOutcome(ctx, err)
+			recordHealthOutcome(healthAttempt, outcome)
+			telemetryAttempt.finishStreaming(outcome)
 			lastErr = err
 			if !s.fallback || ctx.Err() != nil || !eligibleForFallback(err) {
 				return err
@@ -205,9 +223,12 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 				_ = stream.Close()
 				if errors.Is(err, io.EOF) {
 					healthAttempt.success()
+					telemetryAttempt.finishStreaming(outcomeSuccess)
 					return nil
 				}
-				recordHealthOutcome(healthAttempt, ctx, err)
+				outcome := classifyProviderOutcome(ctx, err)
+				recordHealthOutcome(healthAttempt, outcome)
+				telemetryAttempt.finishStreaming(outcome)
 				lastErr = err
 				if !committed && s.fallback && ctx.Err() == nil && eligibleForFallback(err) {
 					break
@@ -217,9 +238,13 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 			if logicalModel {
 				chunk.Model = req.Model
 			}
+			if chunk.Content != "" {
+				telemetryAttempt.firstContent()
+			}
 			if err := emit(chunk); err != nil {
 				_ = stream.Close()
 				healthAttempt.ignore()
+				telemetryAttempt.finishStreaming(outcomeCanceled)
 				return err
 			}
 			committed = true
@@ -235,23 +260,31 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 }
 
 func trackerFor(providers []provider.Provider, config CircuitConfig) *healthTracker {
+	return newHealthTracker(providerNames(providers), config, nil)
+}
+
+func telemetryFor(providers []provider.Provider) *telemetryTracker {
+	return newTelemetryTracker(providerNames(providers), defaultTelemetrySampleCapacity, nil)
+}
+
+func providerNames(providers []provider.Provider) []string {
 	names := make([]string, len(providers))
 	for i, item := range providers {
 		names[i] = item.Name()
 	}
-	return newHealthTracker(names, config, nil)
+	return names
 }
 
 func circuitOpenError(providerName string) error {
 	return provider.NewError(provider.ErrorUnavailable, providerName, ErrCircuitOpen)
 }
 
-func recordHealthOutcome(attempt *healthAttempt, ctx context.Context, err error) {
-	if err == nil {
+func recordHealthOutcome(attempt *healthAttempt, outcome providerOutcome) {
+	if outcome == outcomeSuccess {
 		attempt.success()
 		return
 	}
-	if ctx.Err() != nil || !degradesProviderHealth(err) {
+	if !outcome.degradesHealth() {
 		attempt.ignore()
 		return
 	}
@@ -259,13 +292,11 @@ func recordHealthOutcome(attempt *healthAttempt, ctx context.Context, err error)
 }
 
 func degradesProviderHealth(err error) bool {
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) {
-		return false
-	}
-	return providerErr.Kind == provider.ErrorUnavailable ||
-		providerErr.Kind == provider.ErrorTimeout ||
-		providerErr.Kind == provider.ErrorRateLimited
+	return classifyProviderOutcome(nil, err).degradesHealth()
+}
+
+func (s *Service) TelemetrySnapshot(providerName string) (ProviderTelemetrySnapshot, bool) {
+	return s.telemetry.snapshot(providerName)
 }
 
 func validateCore(req openai.ChatCompletionRequest) error {
