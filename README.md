@@ -134,6 +134,30 @@ commitment still affect health but never trigger fallback for that response.
 Health state is local to the RouteForge process and resets on restart. There
 are no background probes or distributed circuit coordination in this phase.
 
+## Passive provider telemetry
+
+Every actual provider attempt records process-local operational metadata. The
+gateway tracks attempts, successes, cancellations, typed failure counts,
+recent timestamps, and bounded rolling latency samples independently for each
+provider. Circuit-skipped providers and providers without a usable model
+mapping do not record attempts.
+
+For synchronous calls, latency runs from provider invocation until the
+provider returns a response or error. For streaming calls, time to first
+content runs from provider invocation until the first provider-independent
+chunk with non-empty assistant content. Role-only chunks, finish-only chunks,
+and provider heartbeat/ping events do not count as first content. Total stream
+duration runs until normal provider completion, failure, or cancellation.
+Failed streams retain their elapsed duration and any previously observed time
+to first content, but are never counted as successes.
+
+Telemetry uses fixed-size rolling samples rather than retaining an unbounded
+request history. It contains no prompts, message content, bodies, credentials,
+headers, or raw provider errors. Measurements reset when the process restarts.
+Routing remains deterministic in Phase 4B; this telemetry is groundwork for
+future routing policies and observability integrations, neither of which is
+implemented yet.
+
 ## Model resolution
 
 With an explicit provider, a model name that does not begin with `routeforge/`
