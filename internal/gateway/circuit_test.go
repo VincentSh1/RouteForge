@@ -98,6 +98,25 @@ func TestCircuitAllowsOnlyOneConcurrentHalfOpenTrial(t *testing.T) {
 	}
 }
 
+func TestCircuitEligibilityCheckDoesNotReserveHalfOpenTrial(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	tracker := newHealthTracker([]string{"provider"}, CircuitConfig{FailureThreshold: 1, OpenDuration: time.Minute}, func() time.Time { return now })
+	attempt, _ := tracker.begin("provider")
+	attempt.failure()
+	now = now.Add(time.Minute)
+
+	if !tracker.eligible("provider") || !tracker.eligible("provider") {
+		t.Fatal("eligible circuit was rejected")
+	}
+	snapshot, _ := tracker.snapshot("provider")
+	if snapshot.State != circuitOpen || snapshot.HalfOpenInFlight {
+		t.Fatalf("eligibility check mutated circuit: %+v", snapshot)
+	}
+	if _, ok := tracker.begin("provider"); !ok {
+		t.Fatal("authoritative admission rejected the half-open trial")
+	}
+}
+
 func assertCircuit(t *testing.T, tracker *healthTracker, state circuitState, failures int) {
 	t.Helper()
 	snapshot, ok := tracker.snapshot("provider")

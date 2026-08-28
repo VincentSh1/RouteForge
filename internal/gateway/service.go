@@ -38,11 +38,14 @@ func (e *UnsupportedRoleError) Error() string {
 }
 
 type Service struct {
-	providers []provider.Provider
-	resolver  *model.Resolver
-	fallback  bool
-	health    *healthTracker
-	telemetry *telemetryTracker
+	providers       []provider.Provider
+	resolver        *model.Resolver
+	fallback        bool
+	health          *healthTracker
+	telemetry       *telemetryTracker
+	routing         routingPolicy
+	rankByTelemetry bool
+	now             func() time.Time
 }
 
 func New(p provider.Provider, resolver *model.Resolver) *Service {
@@ -62,6 +65,8 @@ func NewWithCircuitBreaker(p provider.Provider, resolver *model.Resolver, config
 		resolver:  resolver,
 		health:    trackerFor(providers, config),
 		telemetry: telemetryFor(providers),
+		routing:   deterministicRoutingPolicy{},
+		now:       time.Now,
 	}
 }
 
@@ -82,7 +87,33 @@ func NewAutoWithCircuitBreaker(resolver *model.Resolver, config CircuitConfig, p
 		fallback:  true,
 		health:    trackerFor(providers, config),
 		telemetry: telemetryFor(providers),
+		routing:   deterministicRoutingPolicy{},
+		now:       time.Now,
 	}
+}
+
+func NewAutoWithRouting(resolver *model.Resolver, circuitConfig CircuitConfig, routingConfig RoutingConfig, providers ...provider.Provider) (*Service, error) {
+	return newAutoService(resolver, circuitConfig, routingConfig, providers...)
+}
+
+func newAutoService(resolver *model.Resolver, circuitConfig CircuitConfig, routingConfig RoutingConfig, providers ...provider.Provider) (*Service, error) {
+	if resolver == nil {
+		resolver = model.New(nil)
+	}
+	routing, rankByTelemetry, err := newRoutingPolicy(routingConfig)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{
+		providers:       providers,
+		resolver:        resolver,
+		fallback:        true,
+		health:          trackerFor(providers, circuitConfig),
+		telemetry:       telemetryFor(providers),
+		routing:         routing,
+		rankByTelemetry: rankByTelemetry,
+		now:             time.Now,
+	}, nil
 }
 
 func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
@@ -107,7 +138,7 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 	var lastErr error
 	attempted := false
 	usableMapping := false
-	for _, item := range s.providers {
+	for _, item := range s.orderedProviders(nonStreamingMode) {
 		providerRequest := req
 		if logicalModel {
 			resolved, err := s.resolver.Resolve(req.Model, item.Name())
@@ -176,7 +207,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 	var lastErr error
 	attempted := false
 	usableMapping := false
-	for _, item := range s.providers {
+	for _, item := range s.orderedProviders(streamingMode) {
 		providerRequest := req
 		if logicalModel {
 			resolved, err := s.resolver.Resolve(req.Model, item.Name())
@@ -273,6 +304,29 @@ func providerNames(providers []provider.Provider) []string {
 		names[i] = item.Name()
 	}
 	return names
+}
+
+func (s *Service) orderedProviders(mode requestMode) []provider.Provider {
+	if !s.fallback || !s.rankByTelemetry {
+		return s.routing.order(s.providers, mode, nil, s.now())
+	}
+
+	eligible := make([]provider.Provider, 0, len(s.providers))
+	ineligible := make([]provider.Provider, 0, len(s.providers))
+	snapshots := make(map[string]ProviderTelemetrySnapshot, len(s.providers))
+	for _, item := range s.providers {
+		if !s.health.eligible(item.Name()) {
+			ineligible = append(ineligible, item)
+			continue
+		}
+		eligible = append(eligible, item)
+		if snapshot, ok := s.telemetry.snapshot(item.Name()); ok {
+			snapshots[item.Name()] = snapshot
+		}
+	}
+
+	ordered := s.routing.order(eligible, mode, snapshots, s.now())
+	return append(ordered, ineligible...)
 }
 
 func circuitOpenError(providerName string) error {

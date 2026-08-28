@@ -94,6 +94,27 @@ func (t *healthTracker) begin(providerName string) (*healthAttempt, bool) {
 	}
 }
 
+// eligible reports whether a request could currently be admitted without
+// reserving a HALF_OPEN trial. begin remains the authoritative atomic check.
+func (t *healthTracker) eligible(providerName string) bool {
+	health := t.providers[providerName]
+	if health == nil {
+		return false
+	}
+
+	health.mu.Lock()
+	defer health.mu.Unlock()
+
+	switch health.state {
+	case circuitOpen:
+		return !t.now().Before(health.openUntil)
+	case circuitHalfOpen:
+		return !health.halfOpenInFlight
+	default:
+		return true
+	}
+}
+
 func (a *healthAttempt) success() {
 	health := a.provider
 	health.mu.Lock()
