@@ -8,23 +8,30 @@ import (
 const defaultTelemetrySampleCapacity = 64
 
 type ProviderTelemetrySnapshot struct {
-	Provider                    string
-	Attempts                    uint64
-	Successes                   uint64
-	Failures                    uint64
-	Cancellations               uint64
-	Timeouts                    uint64
-	UnavailableFailures         uint64
-	RateLimitFailures           uint64
-	InvalidRequestFailures      uint64
-	InternalFailures            uint64
-	OtherFailures               uint64
-	LastAttempt                 time.Time
-	LastSuccess                 time.Time
-	LastFailure                 time.Time
-	NonStreamingLatencies       []time.Duration
-	StreamingTimeToFirstContent []time.Duration
-	StreamingDurations          []time.Duration
+	Provider                     string
+	Attempts                     uint64
+	Successes                    uint64
+	Failures                     uint64
+	Cancellations                uint64
+	Timeouts                     uint64
+	UnavailableFailures          uint64
+	RateLimitFailures            uint64
+	InvalidRequestFailures       uint64
+	InternalFailures             uint64
+	OtherFailures                uint64
+	LastAttempt                  time.Time
+	LastSuccess                  time.Time
+	LastFailure                  time.Time
+	NonStreamingLatencies        []time.Duration
+	StreamingTimeToFirstContent  []time.Duration
+	StreamingDurations           []time.Duration
+	NonStreamingLatencySamples   []LatencySample
+	StreamingFirstContentSamples []LatencySample
+}
+
+type LatencySample struct {
+	Duration   time.Duration
+	ObservedAt time.Time
 }
 
 type telemetryTracker struct {
@@ -48,8 +55,8 @@ type providerTelemetry struct {
 	lastAttempt            time.Time
 	lastSuccess            time.Time
 	lastFailure            time.Time
-	nonStreamingLatencies  durationRing
-	streamingTTFC          durationRing
+	nonStreamingLatencies  latencyRing
+	streamingTTFC          latencyRing
 	streamingDurations     durationRing
 }
 
@@ -70,8 +77,8 @@ func newTelemetryTracker(providerNames []string, sampleCapacity int, now func() 
 	}
 	for _, name := range providerNames {
 		tracker.providers[name] = &providerTelemetry{
-			nonStreamingLatencies: newDurationRing(sampleCapacity),
-			streamingTTFC:         newDurationRing(sampleCapacity),
+			nonStreamingLatencies: newLatencyRing(sampleCapacity),
+			streamingTTFC:         newLatencyRing(sampleCapacity),
 			streamingDurations:    newDurationRing(sampleCapacity),
 		}
 	}
@@ -96,9 +103,10 @@ func (a *telemetryAttempt) firstContent() {
 		return
 	}
 	a.firstContentRecorded = true
-	duration := a.tracker.now().Sub(a.started)
+	now := a.tracker.now()
+	duration := now.Sub(a.started)
 	a.provider.mu.Lock()
-	a.provider.streamingTTFC.add(duration)
+	a.provider.streamingTTFC.add(duration, now)
 	a.provider.mu.Unlock()
 }
 
@@ -109,7 +117,7 @@ func (a *telemetryAttempt) finishNonStreaming(outcome providerOutcome) {
 	now := a.tracker.now()
 	a.provider.mu.Lock()
 	a.provider.recordOutcome(outcome, now)
-	a.provider.nonStreamingLatencies.add(now.Sub(a.started))
+	a.provider.nonStreamingLatencies.add(now.Sub(a.started), now)
 	a.provider.mu.Unlock()
 }
 
@@ -159,24 +167,68 @@ func (t *telemetryTracker) snapshot(providerName string) (ProviderTelemetrySnaps
 	providerTelemetry.mu.Lock()
 	defer providerTelemetry.mu.Unlock()
 	return ProviderTelemetrySnapshot{
-		Provider:                    providerName,
-		Attempts:                    providerTelemetry.attempts,
-		Successes:                   providerTelemetry.successes,
-		Failures:                    providerTelemetry.failures,
-		Cancellations:               providerTelemetry.cancellations,
-		Timeouts:                    providerTelemetry.timeouts,
-		UnavailableFailures:         providerTelemetry.unavailableFailures,
-		RateLimitFailures:           providerTelemetry.rateLimitFailures,
-		InvalidRequestFailures:      providerTelemetry.invalidRequestFailures,
-		InternalFailures:            providerTelemetry.internalFailures,
-		OtherFailures:               providerTelemetry.otherFailures,
-		LastAttempt:                 providerTelemetry.lastAttempt,
-		LastSuccess:                 providerTelemetry.lastSuccess,
-		LastFailure:                 providerTelemetry.lastFailure,
-		NonStreamingLatencies:       providerTelemetry.nonStreamingLatencies.snapshot(),
-		StreamingTimeToFirstContent: providerTelemetry.streamingTTFC.snapshot(),
-		StreamingDurations:          providerTelemetry.streamingDurations.snapshot(),
+		Provider:                     providerName,
+		Attempts:                     providerTelemetry.attempts,
+		Successes:                    providerTelemetry.successes,
+		Failures:                     providerTelemetry.failures,
+		Cancellations:                providerTelemetry.cancellations,
+		Timeouts:                     providerTelemetry.timeouts,
+		UnavailableFailures:          providerTelemetry.unavailableFailures,
+		RateLimitFailures:            providerTelemetry.rateLimitFailures,
+		InvalidRequestFailures:       providerTelemetry.invalidRequestFailures,
+		InternalFailures:             providerTelemetry.internalFailures,
+		OtherFailures:                providerTelemetry.otherFailures,
+		LastAttempt:                  providerTelemetry.lastAttempt,
+		LastSuccess:                  providerTelemetry.lastSuccess,
+		LastFailure:                  providerTelemetry.lastFailure,
+		NonStreamingLatencies:        providerTelemetry.nonStreamingLatencies.durations(),
+		StreamingTimeToFirstContent:  providerTelemetry.streamingTTFC.durations(),
+		StreamingDurations:           providerTelemetry.streamingDurations.snapshot(),
+		NonStreamingLatencySamples:   providerTelemetry.nonStreamingLatencies.snapshot(),
+		StreamingFirstContentSamples: providerTelemetry.streamingTTFC.snapshot(),
 	}, true
+}
+
+type latencyRing struct {
+	values []LatencySample
+	next   int
+	count  int
+}
+
+func newLatencyRing(capacity int) latencyRing {
+	return latencyRing{values: make([]LatencySample, capacity)}
+}
+
+func (r *latencyRing) add(duration time.Duration, observedAt time.Time) {
+	if len(r.values) == 0 {
+		return
+	}
+	r.values[r.next] = LatencySample{Duration: duration, ObservedAt: observedAt}
+	r.next = (r.next + 1) % len(r.values)
+	if r.count < len(r.values) {
+		r.count++
+	}
+}
+
+func (r *latencyRing) snapshot() []LatencySample {
+	values := make([]LatencySample, r.count)
+	start := 0
+	if r.count == len(r.values) {
+		start = r.next
+	}
+	for i := range r.count {
+		values[i] = r.values[(start+i)%len(r.values)]
+	}
+	return values
+}
+
+func (r *latencyRing) durations() []time.Duration {
+	samples := r.snapshot()
+	values := make([]time.Duration, len(samples))
+	for i, sample := range samples {
+		values[i] = sample.Duration
+	}
+	return values
 }
 
 type durationRing struct {

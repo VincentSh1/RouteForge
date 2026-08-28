@@ -130,6 +130,9 @@ func TestSuccessfulStreamTelemetry(t *testing.T) {
 		!equalDurations(snapshot.StreamingDurations, []time.Duration{10 * time.Millisecond}) {
 		t.Fatalf("stream timings = TTFC %v, duration %v", snapshot.StreamingTimeToFirstContent, snapshot.StreamingDurations)
 	}
+	if len(snapshot.StreamingFirstContentSamples) == 0 || snapshot.StreamingFirstContentSamples[0].ObservedAt.IsZero() {
+		t.Fatal("streaming first-content sample timestamp was not recorded")
+	}
 }
 
 func TestStreamFailureTelemetryBeforeAndAfterFirstContent(t *testing.T) {

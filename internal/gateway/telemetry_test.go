@@ -44,6 +44,9 @@ func TestTelemetryInitialStateAndOutcomeAccounting(t *testing.T) {
 	if snapshot.LastAttempt.IsZero() || snapshot.LastSuccess.IsZero() || snapshot.LastFailure.IsZero() {
 		t.Fatalf("timestamps were not recorded: %+v", snapshot)
 	}
+	if len(snapshot.NonStreamingLatencySamples) == 0 || snapshot.NonStreamingLatencySamples[0].ObservedAt.IsZero() {
+		t.Fatal("non-streaming sample timestamp was not recorded")
+	}
 }
 
 func TestTelemetryProviderStatisticsAreIndependent(t *testing.T) {
@@ -74,9 +77,13 @@ func TestTelemetryRollingSamplesAreBoundedAndCopied(t *testing.T) {
 		t.Fatalf("latencies = %v, want %v", snapshot.NonStreamingLatencies, want)
 	}
 	snapshot.NonStreamingLatencies[0] = time.Hour
+	snapshot.NonStreamingLatencySamples[0].Duration = time.Hour
 	again, _ := tracker.snapshot("provider")
 	if !equalDurations(again.NonStreamingLatencies, want) {
 		t.Fatalf("snapshot mutated tracker state: %v", again.NonStreamingLatencies)
+	}
+	if again.NonStreamingLatencySamples[0].Duration != want[0] {
+		t.Fatalf("timestamped snapshot mutated tracker state: %+v", again.NonStreamingLatencySamples)
 	}
 }
 
