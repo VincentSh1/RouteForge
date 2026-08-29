@@ -21,9 +21,10 @@ func TestDeterministicRoutingPreservesOrder(t *testing.T) {
 
 func TestLatencyRoutingRejectsInvalidConfiguration(t *testing.T) {
 	for name, config := range map[string]RoutingConfig{
-		"unknown policy": {Policy: "fastest", MinSamples: 5, SampleMaxAge: time.Minute},
-		"zero samples":   {Policy: RoutingPolicyLatency, SampleMaxAge: time.Minute},
-		"zero max age":   {Policy: RoutingPolicyLatency, MinSamples: 5},
+		"unknown policy": {Policy: "fastest", MinSamples: 5, SampleMaxAge: time.Minute, ExplorationInterval: 10},
+		"zero samples":   {Policy: RoutingPolicyLatency, SampleMaxAge: time.Minute, ExplorationInterval: 10},
+		"zero max age":   {Policy: RoutingPolicyLatency, MinSamples: 5, ExplorationInterval: 10},
+		"zero interval":  {Policy: RoutingPolicyLatency, MinSamples: 5, SampleMaxAge: time.Minute},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := newRoutingPolicy(config); err == nil {
@@ -35,7 +36,7 @@ func TestLatencyRoutingRejectsInvalidConfiguration(t *testing.T) {
 
 func TestLatencyRoutingUsesModeSpecificMedian(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	policy := latencyRoutingPolicy{minSamples: 3, sampleMaxAge: time.Minute}
+	policy := testLatencyRoutingPolicy(3, time.Minute)
 	providers := routingProviders()
 	snapshots := map[string]ProviderTelemetrySnapshot{
 		"first":  routingSnapshot(now, []time.Duration{100, 100, 100}, []time.Duration{10, 10, 10}, []time.Duration{1, 1, 1}),
@@ -48,7 +49,7 @@ func TestLatencyRoutingUsesModeSpecificMedian(t *testing.T) {
 
 func TestLatencyRoutingPreservesOrderForUntrustedData(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	policy := latencyRoutingPolicy{minSamples: 3, sampleMaxAge: time.Minute}
+	policy := testLatencyRoutingPolicy(3, time.Minute)
 	providers := routingProviders()
 
 	tests := map[string]map[string]ProviderTelemetrySnapshot{
@@ -80,7 +81,7 @@ func TestLatencyRoutingPreservesOrderForUntrustedData(t *testing.T) {
 
 func TestLatencyRoutingRequiresMeaningfulImprovement(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	policy := latencyRoutingPolicy{minSamples: 3, sampleMaxAge: time.Minute}
+	policy := testLatencyRoutingPolicy(3, time.Minute)
 	providers := routingProviders()
 
 	snapshots := map[string]ProviderTelemetrySnapshot{
@@ -95,7 +96,7 @@ func TestLatencyRoutingRequiresMeaningfulImprovement(t *testing.T) {
 
 func TestLatencyRoutingMedianResistsOutlierAndDoesNotMutateSnapshot(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	policy := latencyRoutingPolicy{minSamples: 5, sampleMaxAge: time.Minute}
+	policy := testLatencyRoutingPolicy(5, time.Minute)
 	providers := routingProviders()
 	firstSamples := []time.Duration{100, 100, 100, 100, 100}
 	secondSamples := []time.Duration{50, 50, 50, 50, 10_000}
@@ -219,9 +220,16 @@ func TestStreamingLatencyRoutingUsesTTFCAndPreservesCommitment(t *testing.T) {
 }
 
 func newLatencyTestService(t *testing.T, clock *manualClock, providers ...provider.Provider) *Service {
+	return newLatencyTestServiceWithConfig(t, clock, 5, time.Minute, 10, providers...)
+}
+
+func newLatencyTestServiceWithConfig(t *testing.T, clock *manualClock, minSamples int, sampleMaxAge time.Duration, explorationInterval int, providers ...provider.Provider) *Service {
 	t.Helper()
 	service, err := NewAutoWithRouting(testResolver(), CircuitConfig{FailureThreshold: 1, OpenDuration: time.Minute}, RoutingConfig{
-		Policy: RoutingPolicyLatency, MinSamples: 5, SampleMaxAge: time.Minute,
+		Policy:              RoutingPolicyLatency,
+		MinSamples:          minSamples,
+		SampleMaxAge:        sampleMaxAge,
+		ExplorationInterval: explorationInterval,
 	}, providers...)
 	if err != nil {
 		t.Fatalf("NewAutoWithRouting() error = %v", err)
@@ -231,6 +239,12 @@ func newLatencyTestService(t *testing.T, clock *manualClock, providers ...provid
 	service.telemetry = newTelemetryTracker(names, defaultTelemetrySampleCapacity, clock.Now)
 	service.now = clock.Now
 	return service
+}
+
+func testLatencyRoutingPolicy(minSamples int, sampleMaxAge time.Duration) *latencyRoutingPolicy {
+	return &latencyRoutingPolicy{
+		minSamples: minSamples, sampleMaxAge: sampleMaxAge, explorationInterval: 1000,
+	}
 }
 
 func seedRoutingTelemetry(service *Service, name string, mode requestMode, at time.Time, latency time.Duration, count int) {

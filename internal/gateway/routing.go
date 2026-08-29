@@ -3,6 +3,7 @@ package gateway
 import (
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/VincentSh1/RouteForge/internal/provider"
@@ -16,9 +17,10 @@ const (
 )
 
 type RoutingConfig struct {
-	Policy       string
-	MinSamples   int
-	SampleMaxAge time.Duration
+	Policy              string
+	MinSamples          int
+	SampleMaxAge        time.Duration
+	ExplorationInterval int
 }
 
 type requestMode uint8
@@ -39,8 +41,11 @@ func (deterministicRoutingPolicy) order(candidates []provider.Provider, _ reques
 }
 
 type latencyRoutingPolicy struct {
-	minSamples   int
-	sampleMaxAge time.Duration
+	minSamples          int
+	sampleMaxAge        time.Duration
+	explorationInterval int
+	explorationMu       sync.Mutex
+	explorationCounts   [2]int
 }
 
 func newRoutingPolicy(config RoutingConfig) (routingPolicy, bool, error) {
@@ -54,33 +59,50 @@ func newRoutingPolicy(config RoutingConfig) (routingPolicy, bool, error) {
 		if config.SampleMaxAge <= 0 {
 			return nil, false, fmt.Errorf("routing sample maximum age must be positive")
 		}
-		return latencyRoutingPolicy{minSamples: config.MinSamples, sampleMaxAge: config.SampleMaxAge}, true, nil
+		if config.ExplorationInterval <= 0 {
+			return nil, false, fmt.Errorf("routing exploration interval must be positive")
+		}
+		return &latencyRoutingPolicy{
+			minSamples:          config.MinSamples,
+			sampleMaxAge:        config.SampleMaxAge,
+			explorationInterval: config.ExplorationInterval,
+		}, true, nil
 	default:
 		return nil, false, fmt.Errorf("unknown routing policy")
 	}
 }
 
-func (p latencyRoutingPolicy) order(candidates []provider.Provider, mode requestMode, snapshots map[string]ProviderTelemetrySnapshot, now time.Time) []provider.Provider {
+func (p *latencyRoutingPolicy) order(candidates []provider.Provider, mode requestMode, snapshots map[string]ProviderTelemetrySnapshot, now time.Time) []provider.Provider {
 	ordered := append([]provider.Provider(nil), candidates...)
 	if len(ordered) < 2 {
 		return ordered
 	}
 
 	medians := make([]time.Duration, len(ordered))
+	explorationCandidate := -1
+	largestDeficit := 0
 	for i, candidate := range ordered {
-		snapshot, ok := snapshots[candidate.Name()]
-		if !ok {
-			return ordered
-		}
+		snapshot := snapshots[candidate.Name()]
 		samples := recentLatencySamples(relevantLatency(snapshot, mode), now, p.sampleMaxAge)
 		if len(samples) < p.minSamples {
-			return ordered
+			deficit := p.minSamples - len(samples)
+			if deficit > largestDeficit {
+				largestDeficit = deficit
+				explorationCandidate = i
+			}
+			continue
 		}
 		durations := make([]time.Duration, len(samples))
 		for j, sample := range samples {
 			durations[j] = sample.Duration
 		}
 		medians[i] = medianDuration(durations)
+	}
+	if explorationCandidate >= 0 {
+		if p.explorationDue(mode) {
+			moveProviderToFront(ordered, explorationCandidate)
+		}
+		return ordered
 	}
 
 	best := 0
@@ -93,10 +115,26 @@ func (p latencyRoutingPolicy) order(candidates []provider.Provider, mode request
 		return ordered
 	}
 
-	selected := ordered[best]
-	copy(ordered[1:best+1], ordered[0:best])
-	ordered[0] = selected
+	moveProviderToFront(ordered, best)
 	return ordered
+}
+
+func (p *latencyRoutingPolicy) explorationDue(mode requestMode) bool {
+	p.explorationMu.Lock()
+	defer p.explorationMu.Unlock()
+
+	p.explorationCounts[mode]++
+	if p.explorationCounts[mode] < p.explorationInterval {
+		return false
+	}
+	p.explorationCounts[mode] = 0
+	return true
+}
+
+func moveProviderToFront(providers []provider.Provider, selected int) {
+	provider := providers[selected]
+	copy(providers[1:selected+1], providers[0:selected])
+	providers[0] = provider
 }
 
 func relevantLatency(snapshot ProviderTelemetrySnapshot, mode requestMode) []LatencySample {
