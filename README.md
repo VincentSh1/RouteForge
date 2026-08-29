@@ -2,7 +2,7 @@
 
 RouteForge is an OpenAI-compatible AI inference gateway written in Go. It
 supports streaming and synchronous chat completions through mock, OpenAI, and Anthropic
-providers with explicit selection or deterministic fallback routing.
+providers with explicit selection, fallback, and optional latency-aware routing.
 
 ## API
 
@@ -12,8 +12,8 @@ providers with explicit selection or deterministic fallback routing.
 - Streaming and non-streaming chat completions through provider interfaces
 - OpenAI-style success and error responses
 
-Authentication, persistence, caching, rate limiting, scoring-based routing,
-and observability integrations are intentionally out of scope.
+Authentication, persistence, caching, rate limiting, cost-aware routing, and
+observability integrations are intentionally out of scope.
 
 ## Requirements
 
@@ -39,6 +39,9 @@ environment variables:
 | `ROUTEFORGE_STREAM_IDLE_TIMEOUT` | `30s` |
 | `ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD` | `3` |
 | `ROUTEFORGE_CIRCUIT_OPEN_DURATION` | `30s` |
+| `ROUTEFORGE_ROUTING_POLICY` | `deterministic` |
+| `ROUTEFORGE_ROUTING_MIN_SAMPLES` | `5` |
+| `ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE` | `5m` |
 | `ROUTEFORGE_PROVIDER` | `mock` |
 | `OPENAI_API_KEY` | unset |
 | `ANTHROPIC_API_KEY` | unset |
@@ -101,8 +104,8 @@ resets the inactivity timer.
 ## Provider selection
 
 `ROUTEFORGE_PROVIDER` accepts `mock`, `openai`, `anthropic`, or `auto`.
-Selecting a real provider requires its corresponding API key. `auto` uses each
-configured real provider at most once, in this fixed order:
+Selecting a real provider requires its corresponding API key. By default,
+`auto` uses each configured real provider at most once, in this fixed order:
 
 1. OpenAI
 2. Anthropic
@@ -110,6 +113,28 @@ configured real provider at most once, in this fixed order:
 Auto mode falls back only after rate limiting, timeout, or temporary
 unavailability. It does not fall back after an invalid request, and it never
 falls back to the mock provider.
+
+### Routing policies
+
+`ROUTEFORGE_ROUTING_POLICY=deterministic` is the default and preserves the
+configured provider order exactly. `latency` is an opt-in policy for auto mode;
+explicit provider selection is never redirected by telemetry.
+
+The latency policy uses the median of recent synchronous completion latency for
+non-streaming requests and recent time to first assistant content for streaming
+requests. It does not mix those samples or use total stream duration. Every
+circuit-eligible candidate must have at least
+`ROUTEFORGE_ROUTING_MIN_SAMPLES` samples no older than
+`ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE`; otherwise the request keeps deterministic
+order. This cold-start rule ensures an unmeasured provider is not permanently
+penalized and one fast observation cannot dominate routing.
+
+To avoid switching on minor noise, the fastest candidate must be at least 10%
+faster than the deterministic-first candidate. When it is, RouteForge moves
+only that candidate to the front and preserves the relative fallback order of
+the remaining providers. Circuit eligibility is evaluated first, and atomic
+HALF_OPEN admission remains authoritative. The ordered candidate list is
+calculated once per request and is not reranked during fallback.
 
 ## Passive provider health
 
@@ -152,11 +177,11 @@ Failed streams retain their elapsed duration and any previously observed time
 to first content, but are never counted as successes.
 
 Telemetry uses fixed-size rolling samples rather than retaining an unbounded
-request history. It contains no prompts, message content, bodies, credentials,
-headers, or raw provider errors. Measurements reset when the process restarts.
-Routing remains deterministic in Phase 4B; this telemetry is groundwork for
-future routing policies and observability integrations, neither of which is
-implemented yet.
+request history. Latency samples include observation times so stale values can
+be excluded from opt-in latency routing. It contains no prompts, message
+content, bodies, credentials, headers, or raw provider errors. Measurements
+reset when the process restarts. The default routing policy remains
+deterministic; no telemetry endpoint or observability integration is provided.
 
 ## Model resolution
 
