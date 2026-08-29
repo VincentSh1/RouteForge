@@ -18,6 +18,8 @@ func TestLoadDefaults(t *testing.T) {
 		"ROUTEFORGE_STREAM_IDLE_TIMEOUT",
 		"ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD",
 		"ROUTEFORGE_CIRCUIT_OPEN_DURATION",
+		"ROUTEFORGE_ROUTING_MIN_SAMPLES",
+		"ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE",
 	} {
 		t.Setenv(key, "")
 	}
@@ -39,6 +41,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.CircuitFailureThreshold != 3 || cfg.CircuitOpenDuration != 30*time.Second {
 		t.Fatal("unexpected circuit breaker defaults")
 	}
+	if cfg.RoutingPolicy != RoutingPolicyDeterministic || cfg.RoutingMinSamples != 5 || cfg.RoutingSampleMaxAge != 5*time.Minute {
+		t.Fatal("unexpected routing defaults")
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -52,6 +57,9 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("ROUTEFORGE_STREAM_IDLE_TIMEOUT", "7s")
 	t.Setenv("ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD", "4")
 	t.Setenv("ROUTEFORGE_CIRCUIT_OPEN_DURATION", "8s")
+	t.Setenv("ROUTEFORGE_ROUTING_POLICY", RoutingPolicyLatency)
+	t.Setenv("ROUTEFORGE_ROUTING_MIN_SAMPLES", "7")
+	t.Setenv("ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", "9m")
 
 	cfg, err := Load()
 	if err != nil {
@@ -62,6 +70,30 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.CircuitFailureThreshold != 4 || cfg.CircuitOpenDuration != 8*time.Second {
 		t.Fatal("unexpected circuit breaker configuration")
+	}
+	if cfg.RoutingPolicy != RoutingPolicyLatency || cfg.RoutingMinSamples != 7 || cfg.RoutingSampleMaxAge != 9*time.Minute {
+		t.Fatal("unexpected routing configuration")
+	}
+}
+
+func TestLoadRejectsInvalidRoutingConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		key   string
+		value string
+	}{
+		{key: "ROUTEFORGE_ROUTING_POLICY", value: "fastest"},
+		{key: "ROUTEFORGE_ROUTING_MIN_SAMPLES", value: "0"},
+		{key: "ROUTEFORGE_ROUTING_MIN_SAMPLES", value: "many"},
+		{key: "ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", value: "0s"},
+		{key: "ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", value: "forever"},
+	} {
+		t.Run(test.key+"="+test.value, func(t *testing.T) {
+			setProviderDefaults(t)
+			t.Setenv(test.key, test.value)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want an error")
+			}
+		})
 	}
 }
 
@@ -160,4 +192,7 @@ func setProviderDefaults(t *testing.T) {
 	t.Setenv("ROUTEFORGE_MODEL_GENERAL_ANTHROPIC", "")
 	t.Setenv("ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD", "")
 	t.Setenv("ROUTEFORGE_CIRCUIT_OPEN_DURATION", "")
+	t.Setenv("ROUTEFORGE_ROUTING_POLICY", RoutingPolicyDeterministic)
+	t.Setenv("ROUTEFORGE_ROUTING_MIN_SAMPLES", "")
+	t.Setenv("ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", "")
 }

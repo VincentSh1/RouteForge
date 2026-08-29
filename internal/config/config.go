@@ -18,7 +18,10 @@ const (
 	defaultStreamIdleTimeout       = 30 * time.Second
 	defaultCircuitOpenDuration     = 30 * time.Second
 	defaultCircuitFailureThreshold = 3
+	defaultRoutingMinSamples       = 5
+	defaultRoutingSampleMaxAge     = 5 * time.Minute
 	defaultProvider                = "mock"
+	defaultRoutingPolicy           = RoutingPolicyDeterministic
 )
 
 const (
@@ -26,6 +29,9 @@ const (
 	ProviderOpenAI    = "openai"
 	ProviderAnthropic = "anthropic"
 	ProviderAuto      = "auto"
+
+	RoutingPolicyDeterministic = "deterministic"
+	RoutingPolicyLatency       = "latency"
 )
 
 type Config struct {
@@ -38,6 +44,9 @@ type Config struct {
 	StreamIdleTimeout       time.Duration
 	CircuitFailureThreshold int
 	CircuitOpenDuration     time.Duration
+	RoutingPolicy           string
+	RoutingMinSamples       int
+	RoutingSampleMaxAge     time.Duration
 	Provider                string
 	OpenAIAPIKey            string
 	AnthropicAPIKey         string
@@ -62,6 +71,9 @@ func Load() (Config, error) {
 		StreamIdleTimeout:       defaultStreamIdleTimeout,
 		CircuitFailureThreshold: defaultCircuitFailureThreshold,
 		CircuitOpenDuration:     defaultCircuitOpenDuration,
+		RoutingPolicy:           strings.ToLower(strings.TrimSpace(envOrDefault("ROUTEFORGE_ROUTING_POLICY", defaultRoutingPolicy))),
+		RoutingMinSamples:       defaultRoutingMinSamples,
+		RoutingSampleMaxAge:     defaultRoutingSampleMaxAge,
 		Provider:                strings.ToLower(strings.TrimSpace(envOrDefault("ROUTEFORGE_PROVIDER", defaultProvider))),
 		OpenAIAPIKey:            os.Getenv("OPENAI_API_KEY"),
 		AnthropicAPIKey:         os.Getenv("ANTHROPIC_API_KEY"),
@@ -80,6 +92,7 @@ func Load() (Config, error) {
 		{"ROUTEFORGE_PROVIDER_TIMEOUT", &cfg.ProviderTimeout},
 		{"ROUTEFORGE_STREAM_IDLE_TIMEOUT", &cfg.StreamIdleTimeout},
 		{"ROUTEFORGE_CIRCUIT_OPEN_DURATION", &cfg.CircuitOpenDuration},
+		{"ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", &cfg.RoutingSampleMaxAge},
 	}
 	if raw := os.Getenv("ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD"); raw != "" {
 		threshold, err := strconv.Atoi(raw)
@@ -87,6 +100,13 @@ func Load() (Config, error) {
 			return Config{}, validationError("ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD must be a positive integer")
 		}
 		cfg.CircuitFailureThreshold = threshold
+	}
+	if raw := os.Getenv("ROUTEFORGE_ROUTING_MIN_SAMPLES"); raw != "" {
+		minimum, err := strconv.Atoi(raw)
+		if err != nil || minimum <= 0 {
+			return Config{}, validationError("ROUTEFORGE_ROUTING_MIN_SAMPLES must be a positive integer")
+		}
+		cfg.RoutingMinSamples = minimum
 	}
 	for _, value := range values {
 		raw := os.Getenv(value.key)
@@ -102,6 +122,11 @@ func Load() (Config, error) {
 
 	if cfg.Addr == "" {
 		return Config{}, validationError("ROUTEFORGE_ADDR must not be empty")
+	}
+	switch cfg.RoutingPolicy {
+	case RoutingPolicyDeterministic, RoutingPolicyLatency:
+	default:
+		return Config{}, validationError("ROUTEFORGE_ROUTING_POLICY must be deterministic or latency")
 	}
 	switch cfg.Provider {
 	case ProviderMock:
