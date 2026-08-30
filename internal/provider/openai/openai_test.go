@@ -56,8 +56,38 @@ func TestCompleteTranslatesRequestAndResponse(t *testing.T) {
 	if response.ID != "chatcmpl-test" || response.Model != "gpt-test" || response.Choices[0].Message.Content != "Hi" {
 		t.Fatalf("unexpected response: %+v", response)
 	}
-	if response.Usage.TotalTokens != 5 {
+	if response.Usage == nil || response.Usage.InputTokens == nil || *response.Usage.InputTokens != 3 ||
+		response.Usage.OutputTokens == nil || *response.Usage.OutputTokens != 2 ||
+		response.Usage.TotalTokens == nil || *response.Usage.TotalTokens != 5 {
 		t.Fatalf("usage = %+v", response.Usage)
+	}
+}
+
+func TestCompletePreservesMissingUsageAndRejectsMalformedUsage(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"id":"id","model":"model","choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+		}))
+		defer server.Close()
+		response, err := New(server.Client(), "test-key", server.URL, time.Second).Complete(context.Background(), validRequest())
+		if err != nil || response.Usage != nil {
+			t.Fatalf("response = %+v, error = %v", response, err)
+		}
+	})
+
+	for name, upstreamUsage := range map[string]string{
+		"partial":      `{"prompt_tokens":1}`,
+		"inconsistent": `{"prompt_tokens":1,"completion_tokens":2,"total_tokens":9}`,
+		"negative":     `{"prompt_tokens":-1,"completion_tokens":2,"total_tokens":1}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"id":"id","model":"model","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":` + upstreamUsage + `}`))
+			}))
+			defer server.Close()
+			_, err := New(server.Client(), "test-key", server.URL, time.Second).Complete(context.Background(), validRequest())
+			assertErrorKind(t, err, providerpkg.ErrorInternal)
+		})
 	}
 }
 
@@ -116,7 +146,7 @@ func TestStreamTranslatesIncrementalSSE(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		if r.URL.Path != "/v1/chat/completions" || !body.Stream || body.Model != "gpt-test" {
+		if r.URL.Path != "/v1/chat/completions" || !body.Stream || body.Model != "gpt-test" || body.StreamOptions == nil || !body.StreamOptions.IncludeUsage {
 			t.Errorf("unexpected streaming request: path=%s body=%+v", r.URL.Path, body)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -124,6 +154,7 @@ func TestStreamTranslatesIncrementalSSE(t *testing.T) {
 		w.(http.Flusher).Flush()
 		<-continueStream
 		_, _ = w.Write([]byte("data: {\"id\":\"one\",\"created\":1,\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\" there\"},\"finish_reason\":null}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"one\",\"created\":1,\"model\":\"gpt-test\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n"))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
@@ -142,6 +173,10 @@ func TestStreamTranslatesIncrementalSSE(t *testing.T) {
 	if err != nil || second.Content != " there" {
 		t.Fatalf("second chunk = %+v, %v", second, err)
 	}
+	usageChunk, err := stream.Next()
+	if err != nil || usageChunk.Content != "" || usageChunk.Usage == nil || usageChunk.Usage.TotalTokens == nil || *usageChunk.Usage.TotalTokens != 5 {
+		t.Fatalf("usage chunk = %+v, %v", usageChunk, err)
+	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("final error = %v, want EOF", err)
 	}
@@ -154,6 +189,7 @@ func TestStreamRejectsMalformedAndOversizedEvents(t *testing.T) {
 	}{
 		{name: "malformed", data: "not-json"},
 		{name: "oversized", data: strings.Repeat("x", providerpkg.MaxSSEEventSize+1)},
+		{name: "malformed usage", data: `{"choices":[],"usage":{"prompt_tokens":1}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

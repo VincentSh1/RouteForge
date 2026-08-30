@@ -79,6 +79,11 @@ func (p *Provider) Complete(ctx context.Context, req common.ChatCompletionReques
 		finishReason = "length"
 	}
 
+	providerUsage, err := normalizeCompleteUsage(decoded.Usage)
+	if err != nil {
+		return common.ChatCompletionResponse{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, err)
+	}
+
 	return common.ChatCompletionResponse{
 		ID:      decoded.ID,
 		Object:  "chat.completion",
@@ -89,11 +94,7 @@ func (p *Provider) Complete(ctx context.Context, req common.ChatCompletionReques
 			Message:      common.Message{Role: "assistant", Content: content.String()},
 			FinishReason: finishReason,
 		}},
-		Usage: common.Usage{
-			PromptTokens:     decoded.Usage.InputTokens,
-			CompletionTokens: decoded.Usage.OutputTokens,
-			TotalTokens:      decoded.Usage.InputTokens + decoded.Usage.OutputTokens,
-		},
+		Usage: providerUsage,
 	}, nil
 }
 
@@ -161,6 +162,7 @@ type stream struct {
 	model    string
 	sentRole bool
 	done     bool
+	usage    *common.Usage
 }
 
 func (s *stream) Next() (providerpkg.StreamChunk, error) {
@@ -194,6 +196,14 @@ func (s *stream) Next() (providerpkg.StreamChunk, error) {
 		case "message_start":
 			s.id = decoded.Message.ID
 			s.model = decoded.Message.Model
+			providerUsage, err := mergeUsage(s.usage, decoded.Message.Usage)
+			if err != nil {
+				return providerpkg.StreamChunk{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, err)
+			}
+			s.usage = providerUsage
+			if providerUsage != nil {
+				return providerpkg.StreamChunk{Usage: providerUsage}, nil
+			}
 			continue
 		case "content_block_start":
 			if decoded.ContentBlock.Type != "text" {
@@ -209,14 +219,25 @@ func (s *stream) Next() (providerpkg.StreamChunk, error) {
 			}
 			return s.textChunk(decoded.Delta.Text), nil
 		case "message_delta":
+			providerUsage, err := mergeUsage(s.usage, decoded.Usage)
+			if err != nil {
+				return providerpkg.StreamChunk{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, err)
+			}
+			s.usage = providerUsage
 			if decoded.Delta.StopReason == "" {
+				if decoded.Usage != nil {
+					return providerpkg.StreamChunk{Usage: providerUsage}, nil
+				}
 				continue
 			}
 			finishReason := "stop"
 			if decoded.Delta.StopReason == "max_tokens" {
 				finishReason = "length"
 			}
-			return providerpkg.StreamChunk{ID: s.id, Created: time.Now().Unix(), Model: s.model, FinishReason: finishReason}, nil
+			return providerpkg.StreamChunk{
+				ID: s.id, Created: time.Now().Unix(), Model: s.model,
+				FinishReason: finishReason, Usage: providerUsage,
+			}, nil
 		case "message_stop":
 			s.done = true
 			return providerpkg.StreamChunk{}, io.EOF
@@ -253,6 +274,7 @@ type streamEvent struct {
 	Message struct {
 		ID    string `json:"id"`
 		Model string `json:"model"`
+		Usage *usage `json:"usage"`
 	} `json:"message"`
 	ContentBlock contentBlock `json:"content_block"`
 	Delta        struct {
@@ -260,6 +282,7 @@ type streamEvent struct {
 		Text       string `json:"text"`
 		StopReason string `json:"stop_reason"`
 	} `json:"delta"`
+	Usage *usage `json:"usage"`
 }
 
 type message struct {
@@ -272,7 +295,7 @@ type response struct {
 	Model      string         `json:"model"`
 	Content    []contentBlock `json:"content"`
 	StopReason string         `json:"stop_reason"`
-	Usage      usage          `json:"usage"`
+	Usage      *usage         `json:"usage"`
 }
 
 type contentBlock struct {
@@ -281,6 +304,51 @@ type contentBlock struct {
 }
 
 type usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens  *uint64 `json:"input_tokens"`
+	OutputTokens *uint64 `json:"output_tokens"`
+}
+
+func normalizeCompleteUsage(upstream *usage) (*common.Usage, error) {
+	if upstream == nil || upstream.InputTokens == nil && upstream.OutputTokens == nil {
+		return nil, nil
+	}
+	if upstream.InputTokens == nil || upstream.OutputTokens == nil {
+		return nil, errors.New("malformed upstream usage")
+	}
+	if *upstream.InputTokens > ^uint64(0)-*upstream.OutputTokens {
+		return nil, errors.New("malformed upstream usage")
+	}
+	return common.NewUsage(
+		*upstream.InputTokens,
+		*upstream.OutputTokens,
+		*upstream.InputTokens+*upstream.OutputTokens,
+	), nil
+}
+
+func mergeUsage(current *common.Usage, upstream *usage) (*common.Usage, error) {
+	if upstream == nil || upstream.InputTokens == nil && upstream.OutputTokens == nil {
+		return current, nil
+	}
+	merged := &common.Usage{}
+	if current != nil {
+		merged.InputTokens = current.InputTokens
+		merged.OutputTokens = current.OutputTokens
+		merged.TotalTokens = current.TotalTokens
+	}
+	if upstream.InputTokens != nil {
+		input := *upstream.InputTokens
+		merged.InputTokens = &input
+	}
+	if upstream.OutputTokens != nil {
+		output := *upstream.OutputTokens
+		merged.OutputTokens = &output
+	}
+	if merged.InputTokens != nil && merged.OutputTokens != nil {
+		if *merged.InputTokens > ^uint64(0)-*merged.OutputTokens {
+			return nil, errors.New("malformed upstream usage")
+		}
+		total := *merged.InputTokens + *merged.OutputTokens
+		merged.TotalTokens = &total
+	}
+	return merged, nil
 }

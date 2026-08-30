@@ -61,7 +61,10 @@ func (s *stream) Next() (provider.StreamChunk, error) {
 	}
 	if !s.finished {
 		s.finished = true
-		return provider.StreamChunk{ID: "chatcmpl-routeforge-mock", Created: time.Now().Unix(), Model: s.model, FinishReason: "stop"}, nil
+		return provider.StreamChunk{
+			ID: "chatcmpl-routeforge-mock", Created: time.Now().Unix(), Model: s.model,
+			FinishReason: "stop", Usage: openai.NewUsage(3, 4, 7),
+		}, nil
 	}
 	return provider.StreamChunk{}, io.EOF
 }
@@ -92,6 +95,6 @@ func (p *Provider) Complete(_ context.Context, req openai.ChatCompletionRequest)
 			Message:      openai.Message{Role: "assistant", Content: text},
 			FinishReason: "stop",
 		}},
-		Usage: openai.Usage{},
+		Usage: openai.NewUsage(3, 4, 7),
 	}, nil
 }

@@ -64,8 +64,37 @@ func TestCompleteTranslatesRequestAndResponse(t *testing.T) {
 	if response.ID != "msg_test" || response.Model != "claude-test" || response.Choices[0].Message.Content != "Hello there" {
 		t.Fatalf("unexpected response: %+v", response)
 	}
-	if response.Usage.PromptTokens != 4 || response.Usage.CompletionTokens != 2 || response.Usage.TotalTokens != 6 {
+	if response.Usage == nil || response.Usage.InputTokens == nil || *response.Usage.InputTokens != 4 ||
+		response.Usage.OutputTokens == nil || *response.Usage.OutputTokens != 2 ||
+		response.Usage.TotalTokens == nil || *response.Usage.TotalTokens != 6 {
 		t.Fatalf("usage = %+v", response.Usage)
+	}
+}
+
+func TestCompletePreservesMissingUsageAndRejectsMalformedUsage(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"id":"id","model":"model","content":[]}`))
+		}))
+		defer server.Close()
+		response, err := New(server.Client(), "test-key", server.URL, time.Second).Complete(context.Background(), validRequest())
+		if err != nil || response.Usage != nil {
+			t.Fatalf("response = %+v, error = %v", response, err)
+		}
+	})
+
+	for name, upstreamUsage := range map[string]string{
+		"partial":  `{"input_tokens":1}`,
+		"negative": `{"input_tokens":-1,"output_tokens":2}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"id":"id","model":"model","content":[],"usage":` + upstreamUsage + `}`))
+			}))
+			defer server.Close()
+			_, err := New(server.Client(), "test-key", server.URL, time.Second).Complete(context.Background(), validRequest())
+			assertErrorKind(t, err, providerpkg.ErrorInternal)
+		})
 	}
 }
 
@@ -135,12 +164,12 @@ func TestStreamTranslatesAnthropicEvents(t *testing.T) {
 			t.Errorf("unexpected streaming request: path=%s body=%+v", r.URL.Path, body)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-test\"}}\n\n"))
+		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-test\",\"usage\":{\"input_tokens\":4,\"output_tokens\":0}}}\n\n"))
 		_, _ = w.Write([]byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"))
 		_, _ = w.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\",\"text\":\"Hello\"}}\n\n"))
 		_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" there\"}}\n\n"))
 		_, _ = w.Write([]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\"}\n\n"))
-		_, _ = w.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n"))
+		_, _ = w.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n"))
 		_, _ = w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
 	}))
 	defer server.Close()
@@ -152,6 +181,10 @@ func TestStreamTranslatesAnthropicEvents(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
+	startUsage, err := stream.Next()
+	if err != nil || startUsage.Usage == nil || startUsage.Usage.InputTokens == nil || *startUsage.Usage.InputTokens != 4 || startUsage.Content != "" {
+		t.Fatalf("start usage = %+v, %v", startUsage, err)
+	}
 	first, err := stream.Next()
 	if err != nil || first.Role != "assistant" || first.Content != "Hello" {
 		t.Fatalf("first chunk = %+v, %v", first, err)
@@ -161,7 +194,8 @@ func TestStreamTranslatesAnthropicEvents(t *testing.T) {
 		t.Fatalf("second chunk = %+v, %v", second, err)
 	}
 	finish, err := stream.Next()
-	if err != nil || finish.FinishReason != "stop" {
+	if err != nil || finish.FinishReason != "stop" || finish.Usage == nil || finish.Usage.OutputTokens == nil || *finish.Usage.OutputTokens != 2 ||
+		finish.Usage.TotalTokens == nil || *finish.Usage.TotalTokens != 6 {
 		t.Fatalf("finish chunk = %+v, %v", finish, err)
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
@@ -194,6 +228,21 @@ func TestStreamRejectsMalformedAndOversizedEvents(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStreamRejectsMalformedUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"id\",\"model\":\"model\",\"usage\":{\"input_tokens\":-1}}}\n\n"))
+	}))
+	defer server.Close()
+	stream, err := New(server.Client(), "test-key", server.URL, time.Second).Stream(context.Background(), validRequest())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	assertErrorKind(t, err, providerpkg.ErrorInternal)
 }
 
 func TestStreamMapsTransientStatus(t *testing.T) {

@@ -75,17 +75,18 @@ func (p *Provider) Complete(ctx context.Context, req common.ChatCompletionReques
 		}
 	}
 
+	providerUsage, err := normalizeUsage(decoded.Usage)
+	if err != nil {
+		return common.ChatCompletionResponse{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, err)
+	}
+
 	return common.ChatCompletionResponse{
 		ID:      decoded.ID,
 		Object:  decoded.Object,
 		Created: decoded.Created,
 		Model:   decoded.Model,
 		Choices: choices,
-		Usage: common.Usage{
-			PromptTokens:     decoded.Usage.PromptTokens,
-			CompletionTokens: decoded.Usage.CompletionTokens,
-			TotalTokens:      decoded.Usage.TotalTokens,
-		},
+		Usage:   providerUsage,
 	}, nil
 }
 
@@ -118,6 +119,9 @@ func (p *Provider) Stream(ctx context.Context, req common.ChatCompletionRequest)
 
 func (p *Provider) upstreamRequest(ctx context.Context, req common.ChatCompletionRequest, stream bool) (*http.Request, error) {
 	payload := request{Model: req.Model, Messages: make([]message, len(req.Messages)), Stream: stream}
+	if stream {
+		payload.StreamOptions = &streamOptions{IncludeUsage: true}
+	}
 	for i, item := range req.Messages {
 		payload.Messages[i] = message{Role: item.Role, Content: item.Content}
 	}
@@ -165,7 +169,17 @@ func (s *stream) Next() (providerpkg.StreamChunk, error) {
 			continue
 		}
 		var decoded streamResponse
-		if err := json.Unmarshal(event.Data, &decoded); err != nil || len(decoded.Choices) == 0 {
+		if err := json.Unmarshal(event.Data, &decoded); err != nil {
+			return providerpkg.StreamChunk{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, errors.New("malformed upstream stream event"))
+		}
+		providerUsage, err := normalizeUsage(decoded.Usage)
+		if err != nil {
+			return providerpkg.StreamChunk{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, err)
+		}
+		if len(decoded.Choices) == 0 {
+			if providerUsage != nil {
+				return providerpkg.StreamChunk{Usage: providerUsage}, nil
+			}
 			return providerpkg.StreamChunk{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, errors.New("malformed upstream stream event"))
 		}
 		choice := decoded.Choices[0]
@@ -175,7 +189,7 @@ func (s *stream) Next() (providerpkg.StreamChunk, error) {
 		}
 		return providerpkg.StreamChunk{
 			ID: decoded.ID, Created: decoded.Created, Model: decoded.Model,
-			Role: choice.Delta.Role, Content: choice.Delta.Content, FinishReason: finishReason,
+			Role: choice.Delta.Role, Content: choice.Delta.Content, FinishReason: finishReason, Usage: providerUsage,
 		}, nil
 	}
 }
@@ -186,9 +200,14 @@ func (s *stream) Close() error {
 }
 
 type request struct {
-	Model    string    `json:"model"`
-	Messages []message `json:"messages"`
-	Stream   bool      `json:"stream,omitempty"`
+	Model         string         `json:"model"`
+	Messages      []message      `json:"messages"`
+	Stream        bool           `json:"stream,omitempty"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type streamResponse struct {
@@ -196,6 +215,7 @@ type streamResponse struct {
 	Created int64          `json:"created"`
 	Model   string         `json:"model"`
 	Choices []streamChoice `json:"choices"`
+	Usage   *usage         `json:"usage"`
 }
 
 type streamChoice struct {
@@ -219,7 +239,7 @@ type response struct {
 	Created int64    `json:"created"`
 	Model   string   `json:"model"`
 	Choices []choice `json:"choices"`
-	Usage   usage    `json:"usage"`
+	Usage   *usage   `json:"usage"`
 }
 
 type choice struct {
@@ -229,7 +249,21 @@ type choice struct {
 }
 
 type usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens     *uint64 `json:"prompt_tokens"`
+	CompletionTokens *uint64 `json:"completion_tokens"`
+	TotalTokens      *uint64 `json:"total_tokens"`
+}
+
+func normalizeUsage(upstream *usage) (*common.Usage, error) {
+	if upstream == nil || upstream.PromptTokens == nil && upstream.CompletionTokens == nil && upstream.TotalTokens == nil {
+		return nil, nil
+	}
+	if upstream.PromptTokens == nil || upstream.CompletionTokens == nil || upstream.TotalTokens == nil {
+		return nil, errors.New("malformed upstream usage")
+	}
+	if *upstream.PromptTokens > ^uint64(0)-*upstream.CompletionTokens ||
+		*upstream.TotalTokens != *upstream.PromptTokens+*upstream.CompletionTokens {
+		return nil, errors.New("malformed upstream usage")
+	}
+	return common.NewUsage(*upstream.PromptTokens, *upstream.CompletionTokens, *upstream.TotalTokens), nil
 }

@@ -30,6 +30,7 @@ type StreamChunk struct {
 	Role         string
 	Content      string
 	FinishReason string
+	Usage        *openai.Usage
 }
 
 type ErrorKind string

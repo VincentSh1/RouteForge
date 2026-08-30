@@ -18,7 +18,7 @@ type ChatCompletionResponse struct {
 	Created int64    `json:"created"`
 	Model   string   `json:"model"`
 	Choices []Choice `json:"choices"`
-	Usage   Usage    `json:"usage"`
+	Usage   *Usage   `json:"usage,omitempty"`
 }
 
 type Choice struct {
@@ -28,9 +28,17 @@ type Choice struct {
 }
 
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	InputTokens  *uint64 `json:"prompt_tokens,omitempty"`
+	OutputTokens *uint64 `json:"completion_tokens,omitempty"`
+	TotalTokens  *uint64 `json:"total_tokens,omitempty"`
+}
+
+func NewUsage(inputTokens, outputTokens, totalTokens uint64) *Usage {
+	return &Usage{
+		InputTokens:  &inputTokens,
+		OutputTokens: &outputTokens,
+		TotalTokens:  &totalTokens,
+	}
 }
 
 type ChatCompletionChunk struct {

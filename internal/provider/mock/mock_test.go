@@ -9,6 +9,15 @@ import (
 	"github.com/VincentSh1/RouteForge/internal/openai"
 )
 
+func TestCompleteReportsDeterministicUsage(t *testing.T) {
+	response, err := (&Provider{}).Complete(context.Background(), openai.ChatCompletionRequest{Model: "mock-model"})
+	if err != nil || response.Usage == nil || response.Usage.InputTokens == nil || *response.Usage.InputTokens != 3 ||
+		response.Usage.OutputTokens == nil || *response.Usage.OutputTokens != 4 ||
+		response.Usage.TotalTokens == nil || *response.Usage.TotalTokens != 7 {
+		t.Fatalf("response = %+v, error = %v", response, err)
+	}
+}
+
 func TestStreamEmitsDeterministicChunks(t *testing.T) {
 	stream, err := (&Provider{}).Stream(context.Background(), openai.ChatCompletionRequest{Model: "mock-model"})
 	if err != nil {
@@ -17,6 +26,7 @@ func TestStreamEmitsDeterministicChunks(t *testing.T) {
 	defer stream.Close()
 	var contents []string
 	finished := false
+	usageReported := false
 	for {
 		chunk, err := stream.Next()
 		if errors.Is(err, io.EOF) {
@@ -31,6 +41,9 @@ func TestStreamEmitsDeterministicChunks(t *testing.T) {
 		if chunk.FinishReason == "stop" {
 			finished = true
 		}
+		if chunk.Usage != nil {
+			usageReported = true
+		}
 	}
 	want := []string{"Hello", " from", " RouteForge."}
 	if len(contents) != len(want) {
@@ -41,7 +54,7 @@ func TestStreamEmitsDeterministicChunks(t *testing.T) {
 			t.Fatalf("contents = %q", contents)
 		}
 	}
-	if !finished {
+	if !finished || !usageReported {
 		t.Fatal("stream did not emit successful completion")
 	}
 }
