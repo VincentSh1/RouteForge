@@ -9,19 +9,20 @@ import (
 )
 
 const (
-	defaultAddr                    = "127.0.0.1:8080"
-	defaultReadTimeout             = 15 * time.Second
-	defaultWriteTimeout            = 30 * time.Second
-	defaultIdleTimeout             = 60 * time.Second
-	defaultShutdownTimeout         = 10 * time.Second
-	defaultProviderTimeout         = 30 * time.Second
-	defaultStreamIdleTimeout       = 30 * time.Second
-	defaultCircuitOpenDuration     = 30 * time.Second
-	defaultCircuitFailureThreshold = 3
-	defaultRoutingMinSamples       = 5
-	defaultRoutingSampleMaxAge     = 5 * time.Minute
-	defaultProvider                = "mock"
-	defaultRoutingPolicy           = RoutingPolicyDeterministic
+	defaultAddr                       = "127.0.0.1:8080"
+	defaultReadTimeout                = 15 * time.Second
+	defaultWriteTimeout               = 30 * time.Second
+	defaultIdleTimeout                = 60 * time.Second
+	defaultShutdownTimeout            = 10 * time.Second
+	defaultProviderTimeout            = 30 * time.Second
+	defaultStreamIdleTimeout          = 30 * time.Second
+	defaultCircuitOpenDuration        = 30 * time.Second
+	defaultCircuitFailureThreshold    = 3
+	defaultRoutingMinSamples          = 5
+	defaultRoutingSampleMaxAge        = 5 * time.Minute
+	defaultRoutingExplorationInterval = 10
+	defaultProvider                   = "mock"
+	defaultRoutingPolicy              = RoutingPolicyDeterministic
 )
 
 const (
@@ -35,23 +36,24 @@ const (
 )
 
 type Config struct {
-	Addr                    string
-	ReadTimeout             time.Duration
-	WriteTimeout            time.Duration
-	IdleTimeout             time.Duration
-	ShutdownTimeout         time.Duration
-	ProviderTimeout         time.Duration
-	StreamIdleTimeout       time.Duration
-	CircuitFailureThreshold int
-	CircuitOpenDuration     time.Duration
-	RoutingPolicy           string
-	RoutingMinSamples       int
-	RoutingSampleMaxAge     time.Duration
-	Provider                string
-	OpenAIAPIKey            string
-	AnthropicAPIKey         string
-	GeneralOpenAIModel      string
-	GeneralAnthropicModel   string
+	Addr                       string
+	ReadTimeout                time.Duration
+	WriteTimeout               time.Duration
+	IdleTimeout                time.Duration
+	ShutdownTimeout            time.Duration
+	ProviderTimeout            time.Duration
+	StreamIdleTimeout          time.Duration
+	CircuitFailureThreshold    int
+	CircuitOpenDuration        time.Duration
+	RoutingPolicy              string
+	RoutingMinSamples          int
+	RoutingSampleMaxAge        time.Duration
+	RoutingExplorationInterval int
+	Provider                   string
+	OpenAIAPIKey               string
+	AnthropicAPIKey            string
+	GeneralOpenAIModel         string
+	GeneralAnthropicModel      string
 }
 
 type ValidationError struct {
@@ -62,23 +64,24 @@ func (e *ValidationError) Error() string { return e.Message }
 
 func Load() (Config, error) {
 	cfg := Config{
-		Addr:                    envOrDefault("ROUTEFORGE_ADDR", defaultAddr),
-		ReadTimeout:             defaultReadTimeout,
-		WriteTimeout:            defaultWriteTimeout,
-		IdleTimeout:             defaultIdleTimeout,
-		ShutdownTimeout:         defaultShutdownTimeout,
-		ProviderTimeout:         defaultProviderTimeout,
-		StreamIdleTimeout:       defaultStreamIdleTimeout,
-		CircuitFailureThreshold: defaultCircuitFailureThreshold,
-		CircuitOpenDuration:     defaultCircuitOpenDuration,
-		RoutingPolicy:           strings.ToLower(strings.TrimSpace(envOrDefault("ROUTEFORGE_ROUTING_POLICY", defaultRoutingPolicy))),
-		RoutingMinSamples:       defaultRoutingMinSamples,
-		RoutingSampleMaxAge:     defaultRoutingSampleMaxAge,
-		Provider:                strings.ToLower(strings.TrimSpace(envOrDefault("ROUTEFORGE_PROVIDER", defaultProvider))),
-		OpenAIAPIKey:            os.Getenv("OPENAI_API_KEY"),
-		AnthropicAPIKey:         os.Getenv("ANTHROPIC_API_KEY"),
-		GeneralOpenAIModel:      strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_OPENAI")),
-		GeneralAnthropicModel:   strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_ANTHROPIC")),
+		Addr:                       envOrDefault("ROUTEFORGE_ADDR", defaultAddr),
+		ReadTimeout:                defaultReadTimeout,
+		WriteTimeout:               defaultWriteTimeout,
+		IdleTimeout:                defaultIdleTimeout,
+		ShutdownTimeout:            defaultShutdownTimeout,
+		ProviderTimeout:            defaultProviderTimeout,
+		StreamIdleTimeout:          defaultStreamIdleTimeout,
+		CircuitFailureThreshold:    defaultCircuitFailureThreshold,
+		CircuitOpenDuration:        defaultCircuitOpenDuration,
+		RoutingPolicy:              strings.ToLower(strings.TrimSpace(envOrDefault("ROUTEFORGE_ROUTING_POLICY", defaultRoutingPolicy))),
+		RoutingMinSamples:          defaultRoutingMinSamples,
+		RoutingSampleMaxAge:        defaultRoutingSampleMaxAge,
+		RoutingExplorationInterval: defaultRoutingExplorationInterval,
+		Provider:                   strings.ToLower(strings.TrimSpace(envOrDefault("ROUTEFORGE_PROVIDER", defaultProvider))),
+		OpenAIAPIKey:               os.Getenv("OPENAI_API_KEY"),
+		AnthropicAPIKey:            os.Getenv("ANTHROPIC_API_KEY"),
+		GeneralOpenAIModel:         strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_OPENAI")),
+		GeneralAnthropicModel:      strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_ANTHROPIC")),
 	}
 
 	values := []struct {
@@ -107,6 +110,13 @@ func Load() (Config, error) {
 			return Config{}, validationError("ROUTEFORGE_ROUTING_MIN_SAMPLES must be a positive integer")
 		}
 		cfg.RoutingMinSamples = minimum
+	}
+	if raw := os.Getenv("ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL"); raw != "" {
+		interval, err := strconv.Atoi(raw)
+		if err != nil || interval <= 0 {
+			return Config{}, validationError("ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL must be a positive integer")
+		}
+		cfg.RoutingExplorationInterval = interval
 	}
 	for _, value := range values {
 		raw := os.Getenv(value.key)

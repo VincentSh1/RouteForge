@@ -20,6 +20,7 @@ func TestLoadDefaults(t *testing.T) {
 		"ROUTEFORGE_CIRCUIT_OPEN_DURATION",
 		"ROUTEFORGE_ROUTING_MIN_SAMPLES",
 		"ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE",
+		"ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL",
 	} {
 		t.Setenv(key, "")
 	}
@@ -41,7 +42,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.CircuitFailureThreshold != 3 || cfg.CircuitOpenDuration != 30*time.Second {
 		t.Fatal("unexpected circuit breaker defaults")
 	}
-	if cfg.RoutingPolicy != RoutingPolicyDeterministic || cfg.RoutingMinSamples != 5 || cfg.RoutingSampleMaxAge != 5*time.Minute {
+	if cfg.RoutingPolicy != RoutingPolicyDeterministic || cfg.RoutingMinSamples != 5 || cfg.RoutingSampleMaxAge != 5*time.Minute || cfg.RoutingExplorationInterval != 10 {
 		t.Fatal("unexpected routing defaults")
 	}
 }
@@ -60,6 +61,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("ROUTEFORGE_ROUTING_POLICY", RoutingPolicyLatency)
 	t.Setenv("ROUTEFORGE_ROUTING_MIN_SAMPLES", "7")
 	t.Setenv("ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", "9m")
+	t.Setenv("ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL", "11")
 
 	cfg, err := Load()
 	if err != nil {
@@ -71,7 +73,7 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.CircuitFailureThreshold != 4 || cfg.CircuitOpenDuration != 8*time.Second {
 		t.Fatal("unexpected circuit breaker configuration")
 	}
-	if cfg.RoutingPolicy != RoutingPolicyLatency || cfg.RoutingMinSamples != 7 || cfg.RoutingSampleMaxAge != 9*time.Minute {
+	if cfg.RoutingPolicy != RoutingPolicyLatency || cfg.RoutingMinSamples != 7 || cfg.RoutingSampleMaxAge != 9*time.Minute || cfg.RoutingExplorationInterval != 11 {
 		t.Fatal("unexpected routing configuration")
 	}
 }
@@ -86,6 +88,9 @@ func TestLoadRejectsInvalidRoutingConfiguration(t *testing.T) {
 		{key: "ROUTEFORGE_ROUTING_MIN_SAMPLES", value: "many"},
 		{key: "ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", value: "0s"},
 		{key: "ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", value: "forever"},
+		{key: "ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL", value: "0"},
+		{key: "ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL", value: "-1"},
+		{key: "ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL", value: "many"},
 	} {
 		t.Run(test.key+"="+test.value, func(t *testing.T) {
 			setProviderDefaults(t)
@@ -195,4 +200,5 @@ func setProviderDefaults(t *testing.T) {
 	t.Setenv("ROUTEFORGE_ROUTING_POLICY", RoutingPolicyDeterministic)
 	t.Setenv("ROUTEFORGE_ROUTING_MIN_SAMPLES", "")
 	t.Setenv("ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", "")
+	t.Setenv("ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL", "")
 }
