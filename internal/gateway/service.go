@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/VincentSh1/RouteForge/internal/accounting"
 	"github.com/VincentSh1/RouteForge/internal/model"
 	"github.com/VincentSh1/RouteForge/internal/openai"
 	"github.com/VincentSh1/RouteForge/internal/provider"
@@ -46,6 +47,7 @@ type Service struct {
 	routing         routingPolicy
 	rankByTelemetry bool
 	now             func() time.Time
+	accounting      *accounting.Tracker
 }
 
 func New(p provider.Provider, resolver *model.Resolver) *Service {
@@ -61,12 +63,13 @@ func NewWithCircuitBreaker(p provider.Provider, resolver *model.Resolver, config
 	}
 	providers := []provider.Provider{p}
 	return &Service{
-		providers: providers,
-		resolver:  resolver,
-		health:    trackerFor(providers, config),
-		telemetry: telemetryFor(providers),
-		routing:   deterministicRoutingPolicy{},
-		now:       time.Now,
+		providers:  providers,
+		resolver:   resolver,
+		health:     trackerFor(providers, config),
+		telemetry:  telemetryFor(providers),
+		routing:    deterministicRoutingPolicy{},
+		now:        time.Now,
+		accounting: accounting.NewTracker(nil, accounting.DefaultModelCapacity),
 	}
 }
 
@@ -82,13 +85,14 @@ func NewAutoWithCircuitBreaker(resolver *model.Resolver, config CircuitConfig, p
 		resolver = model.New(nil)
 	}
 	return &Service{
-		providers: providers,
-		resolver:  resolver,
-		fallback:  true,
-		health:    trackerFor(providers, config),
-		telemetry: telemetryFor(providers),
-		routing:   deterministicRoutingPolicy{},
-		now:       time.Now,
+		providers:  providers,
+		resolver:   resolver,
+		fallback:   true,
+		health:     trackerFor(providers, config),
+		telemetry:  telemetryFor(providers),
+		routing:    deterministicRoutingPolicy{},
+		now:        time.Now,
+		accounting: accounting.NewTracker(nil, accounting.DefaultModelCapacity),
 	}
 }
 
@@ -113,6 +117,7 @@ func newAutoService(resolver *model.Resolver, circuitConfig CircuitConfig, routi
 		routing:         routing,
 		rankByTelemetry: rankByTelemetry,
 		now:             time.Now,
+		accounting:      accounting.NewTracker(nil, accounting.DefaultModelCapacity),
 	}, nil
 }
 
@@ -164,6 +169,7 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 		attempted = true
 		telemetryAttempt := s.telemetry.begin(item.Name())
 		response, err := item.Complete(ctx, providerRequest)
+		s.accounting.Record(item.Name(), providerRequest.Model, response.Usage)
 		outcome := classifyProviderOutcome(ctx, err)
 		recordHealthOutcome(healthAttempt, outcome)
 		telemetryAttempt.finishNonStreaming(outcome)
@@ -237,6 +243,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 		telemetryAttempt := s.telemetry.begin(item.Name())
 		stream, err := streamingProvider.Stream(ctx, providerRequest)
 		if err != nil {
+			s.accounting.Record(item.Name(), providerRequest.Model, nil)
 			outcome := classifyProviderOutcome(ctx, err)
 			recordHealthOutcome(healthAttempt, outcome)
 			telemetryAttempt.finishStreaming(outcome)
@@ -248,10 +255,12 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 		}
 
 		committed := false
+		var attemptUsage *openai.Usage
 		for {
 			chunk, err := stream.Next()
 			if err != nil {
 				_ = stream.Close()
+				s.accounting.Record(item.Name(), providerRequest.Model, attemptUsage)
 				if errors.Is(err, io.EOF) {
 					healthAttempt.success()
 					telemetryAttempt.finishStreaming(outcomeSuccess)
@@ -269,11 +278,17 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 			if logicalModel {
 				chunk.Model = req.Model
 			}
+			attemptUsage = mergeUsage(attemptUsage, chunk.Usage)
+			if !clientVisibleChunk(chunk) {
+				continue
+			}
+			chunk.Usage = nil
 			if chunk.Content != "" {
 				telemetryAttempt.firstContent()
 			}
 			if err := emit(chunk); err != nil {
 				_ = stream.Close()
+				s.accounting.Record(item.Name(), providerRequest.Model, attemptUsage)
 				healthAttempt.ignore()
 				telemetryAttempt.finishStreaming(outcomeCanceled)
 				return err
@@ -351,6 +366,48 @@ func degradesProviderHealth(err error) bool {
 
 func (s *Service) TelemetrySnapshot(providerName string) (ProviderTelemetrySnapshot, bool) {
 	return s.telemetry.snapshot(providerName)
+}
+
+func (s *Service) SetPricing(prices accounting.PriceBook) {
+	s.accounting.SetPrices(prices)
+}
+
+func (s *Service) AccountingSnapshot() accounting.Snapshot {
+	return s.accounting.Snapshot()
+}
+
+func mergeUsage(current, incoming *openai.Usage) *openai.Usage {
+	if incoming == nil {
+		return current
+	}
+	merged := &openai.Usage{}
+	if current != nil {
+		merged.InputTokens = cloneTokenCount(current.InputTokens)
+		merged.OutputTokens = cloneTokenCount(current.OutputTokens)
+		merged.TotalTokens = cloneTokenCount(current.TotalTokens)
+	}
+	if incoming.InputTokens != nil {
+		merged.InputTokens = cloneTokenCount(incoming.InputTokens)
+	}
+	if incoming.OutputTokens != nil {
+		merged.OutputTokens = cloneTokenCount(incoming.OutputTokens)
+	}
+	if incoming.TotalTokens != nil {
+		merged.TotalTokens = cloneTokenCount(incoming.TotalTokens)
+	}
+	return merged
+}
+
+func cloneTokenCount(value *uint64) *uint64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func clientVisibleChunk(chunk provider.StreamChunk) bool {
+	return chunk.Role != "" || chunk.Content != "" || chunk.FinishReason != ""
 }
 
 func validateCore(req openai.ChatCompletionRequest) error {
