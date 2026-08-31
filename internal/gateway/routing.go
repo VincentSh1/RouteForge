@@ -6,12 +6,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/VincentSh1/RouteForge/internal/accounting"
 	"github.com/VincentSh1/RouteForge/internal/provider"
 )
 
 const (
 	RoutingPolicyDeterministic = "deterministic"
 	RoutingPolicyLatency       = "latency"
+	RoutingPolicyCost          = "cost"
 
 	routingSwitchMarginDivisor = 10 // An alternative must be at least 10% faster.
 )
@@ -31,13 +33,69 @@ const (
 )
 
 type routingPolicy interface {
-	order([]provider.Provider, requestMode, map[string]ProviderTelemetrySnapshot, time.Time) []provider.Provider
+	order([]provider.Provider, requestMode, map[string]ProviderTelemetrySnapshot, map[string]accounting.Rates, time.Time) []provider.Provider
 }
 
 type deterministicRoutingPolicy struct{}
 
-func (deterministicRoutingPolicy) order(candidates []provider.Provider, _ requestMode, _ map[string]ProviderTelemetrySnapshot, _ time.Time) []provider.Provider {
+func (deterministicRoutingPolicy) order(candidates []provider.Provider, _ requestMode, _ map[string]ProviderTelemetrySnapshot, _ map[string]accounting.Rates, _ time.Time) []provider.Provider {
 	return append([]provider.Provider(nil), candidates...)
+}
+
+type costRoutingPolicy struct{}
+
+func (costRoutingPolicy) order(candidates []provider.Provider, _ requestMode, _ map[string]ProviderTelemetrySnapshot, prices map[string]accounting.Rates, _ time.Time) []provider.Provider {
+	ordered := append([]provider.Provider(nil), candidates...)
+	if len(ordered) < 2 {
+		return ordered
+	}
+
+	// Price dominance is a partial order. A stable topological ordering moves a
+	// proven dominator ahead while preserving configured order when prices are
+	// missing, identical, or cheaper in conflicting dimensions.
+	edges := make([][]int, len(ordered))
+	indegree := make([]int, len(ordered))
+	for i := range ordered {
+		for j := range ordered {
+			if i == j || !ratesDominate(prices[ordered[i].Name()], prices[ordered[j].Name()]) {
+				continue
+			}
+			edges[i] = append(edges[i], j)
+			indegree[j]++
+		}
+	}
+
+	result := make([]provider.Provider, 0, len(ordered))
+	selected := make([]bool, len(ordered))
+	for len(result) < len(ordered) {
+		next := -1
+		for i := range ordered {
+			if !selected[i] && indegree[i] == 0 {
+				next = i
+				break
+			}
+		}
+		if next < 0 {
+			return ordered
+		}
+		selected[next] = true
+		result = append(result, ordered[next])
+		for _, dominated := range edges[next] {
+			indegree[dominated]--
+		}
+	}
+	return result
+}
+
+func ratesDominate(left, right accounting.Rates) bool {
+	if left.InputMicroUSDPerMillion == nil || left.OutputMicroUSDPerMillion == nil ||
+		right.InputMicroUSDPerMillion == nil || right.OutputMicroUSDPerMillion == nil {
+		return false
+	}
+	leftInput, leftOutput := *left.InputMicroUSDPerMillion, *left.OutputMicroUSDPerMillion
+	rightInput, rightOutput := *right.InputMicroUSDPerMillion, *right.OutputMicroUSDPerMillion
+	return leftInput <= rightInput && leftOutput <= rightOutput &&
+		(leftInput < rightInput || leftOutput < rightOutput)
 }
 
 type latencyRoutingPolicy struct {
@@ -67,12 +125,14 @@ func newRoutingPolicy(config RoutingConfig) (routingPolicy, bool, error) {
 			sampleMaxAge:        config.SampleMaxAge,
 			explorationInterval: config.ExplorationInterval,
 		}, true, nil
+	case RoutingPolicyCost:
+		return costRoutingPolicy{}, true, nil
 	default:
 		return nil, false, fmt.Errorf("unknown routing policy")
 	}
 }
 
-func (p *latencyRoutingPolicy) order(candidates []provider.Provider, mode requestMode, snapshots map[string]ProviderTelemetrySnapshot, now time.Time) []provider.Provider {
+func (p *latencyRoutingPolicy) order(candidates []provider.Provider, mode requestMode, snapshots map[string]ProviderTelemetrySnapshot, _ map[string]accounting.Rates, now time.Time) []provider.Provider {
 	ordered := append([]provider.Provider(nil), candidates...)
 	if len(ordered) < 2 {
 		return ordered

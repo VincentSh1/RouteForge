@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/VincentSh1/RouteForge/internal/accounting"
@@ -39,15 +40,17 @@ func (e *UnsupportedRoleError) Error() string {
 }
 
 type Service struct {
-	providers       []provider.Provider
-	resolver        *model.Resolver
-	fallback        bool
-	health          *healthTracker
-	telemetry       *telemetryTracker
-	routing         routingPolicy
-	rankByTelemetry bool
-	now             func() time.Time
-	accounting      *accounting.Tracker
+	providers    []provider.Provider
+	resolver     *model.Resolver
+	fallback     bool
+	health       *healthTracker
+	telemetry    *telemetryTracker
+	routing      routingPolicy
+	rankEligible bool
+	now          func() time.Time
+	accounting   *accounting.Tracker
+	pricingMu    sync.RWMutex
+	pricing      accounting.PriceBook
 }
 
 func New(p provider.Provider, resolver *model.Resolver) *Service {
@@ -104,20 +107,20 @@ func newAutoService(resolver *model.Resolver, circuitConfig CircuitConfig, routi
 	if resolver == nil {
 		resolver = model.New(nil)
 	}
-	routing, rankByTelemetry, err := newRoutingPolicy(routingConfig)
+	routing, rankEligible, err := newRoutingPolicy(routingConfig)
 	if err != nil {
 		return nil, err
 	}
 	return &Service{
-		providers:       providers,
-		resolver:        resolver,
-		fallback:        true,
-		health:          trackerFor(providers, circuitConfig),
-		telemetry:       telemetryFor(providers),
-		routing:         routing,
-		rankByTelemetry: rankByTelemetry,
-		now:             time.Now,
-		accounting:      accounting.NewTracker(nil, accounting.DefaultModelCapacity),
+		providers:    providers,
+		resolver:     resolver,
+		fallback:     true,
+		health:       trackerFor(providers, circuitConfig),
+		telemetry:    telemetryFor(providers),
+		routing:      routing,
+		rankEligible: rankEligible,
+		now:          time.Now,
+		accounting:   accounting.NewTracker(nil, accounting.DefaultModelCapacity),
 	}, nil
 }
 
@@ -143,7 +146,7 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 	var lastErr error
 	attempted := false
 	usableMapping := false
-	for _, item := range s.orderedProviders(nonStreamingMode) {
+	for _, item := range s.orderedProviders(nonStreamingMode, req.Model) {
 		providerRequest := req
 		if logicalModel {
 			resolved, err := s.resolver.Resolve(req.Model, item.Name())
@@ -213,7 +216,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 	var lastErr error
 	attempted := false
 	usableMapping := false
-	for _, item := range s.orderedProviders(streamingMode) {
+	for _, item := range s.orderedProviders(streamingMode, req.Model) {
 		providerRequest := req
 		if logicalModel {
 			resolved, err := s.resolver.Resolve(req.Model, item.Name())
@@ -321,9 +324,9 @@ func providerNames(providers []provider.Provider) []string {
 	return names
 }
 
-func (s *Service) orderedProviders(mode requestMode) []provider.Provider {
-	if !s.fallback || !s.rankByTelemetry {
-		return s.routing.order(s.providers, mode, nil, s.now())
+func (s *Service) orderedProviders(mode requestMode, requestModel string) []provider.Provider {
+	if !s.fallback || !s.rankEligible {
+		return s.routing.order(s.providers, mode, nil, nil, s.now())
 	}
 
 	eligible := make([]provider.Provider, 0, len(s.providers))
@@ -340,8 +343,35 @@ func (s *Service) orderedProviders(mode requestMode) []provider.Provider {
 		}
 	}
 
-	ordered := s.routing.order(eligible, mode, snapshots, s.now())
+	prices := s.candidatePrices(requestModel, eligible)
+	ordered := s.routing.order(eligible, mode, snapshots, prices, s.now())
 	return append(ordered, ineligible...)
+}
+
+func (s *Service) candidatePrices(requestModel string, candidates []provider.Provider) map[string]accounting.Rates {
+	if _, ok := s.routing.(costRoutingPolicy); !ok {
+		return nil
+	}
+
+	s.pricingMu.RLock()
+	prices := accounting.ClonePriceBook(s.pricing)
+	s.pricingMu.RUnlock()
+
+	resolved := make(map[string]accounting.Rates, len(candidates))
+	for _, item := range candidates {
+		modelName := requestModel
+		if model.IsLogical(requestModel) {
+			var err error
+			modelName, err = s.resolver.Resolve(requestModel, item.Name())
+			if err != nil {
+				continue
+			}
+		}
+		if rates, ok := prices[accounting.Key{Provider: item.Name(), Model: modelName}]; ok {
+			resolved[item.Name()] = rates
+		}
+	}
+	return resolved
 }
 
 func circuitOpenError(providerName string) error {
@@ -369,6 +399,9 @@ func (s *Service) TelemetrySnapshot(providerName string) (ProviderTelemetrySnaps
 }
 
 func (s *Service) SetPricing(prices accounting.PriceBook) {
+	s.pricingMu.Lock()
+	s.pricing = accounting.ClonePriceBook(prices)
+	s.pricingMu.Unlock()
 	s.accounting.SetPrices(prices)
 }
 

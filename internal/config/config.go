@@ -35,6 +35,7 @@ const (
 
 	RoutingPolicyDeterministic = "deterministic"
 	RoutingPolicyLatency       = "latency"
+	RoutingPolicyCost          = "cost"
 )
 
 type Config struct {
@@ -149,9 +150,9 @@ func Load() (Config, error) {
 		return Config{}, validationError("ROUTEFORGE_ADDR must not be empty")
 	}
 	switch cfg.RoutingPolicy {
-	case RoutingPolicyDeterministic, RoutingPolicyLatency:
+	case RoutingPolicyDeterministic, RoutingPolicyLatency, RoutingPolicyCost:
 	default:
-		return Config{}, validationError("ROUTEFORGE_ROUTING_POLICY must be deterministic or latency")
+		return Config{}, validationError("ROUTEFORGE_ROUTING_POLICY must be deterministic, latency, or cost")
 	}
 	switch cfg.Provider {
 	case ProviderMock:

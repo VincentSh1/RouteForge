@@ -102,6 +102,19 @@ func TestLoadRejectsInvalidRoutingConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsCostRoutingPolicy(t *testing.T) {
+	setProviderDefaults(t)
+	t.Setenv("ROUTEFORGE_ROUTING_POLICY", RoutingPolicyCost)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RoutingPolicy != RoutingPolicyCost {
+		t.Fatalf("RoutingPolicy = %q, want %q", cfg.RoutingPolicy, RoutingPolicyCost)
+	}
+}
+
 func TestLoadPricing(t *testing.T) {
 	setProviderDefaults(t)
 	t.Setenv("ROUTEFORGE_PRICE_OPENAI_INPUT_USD_PER_MILLION", "1.25")

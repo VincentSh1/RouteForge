@@ -15,7 +15,7 @@ func TestDeterministicRoutingPreservesOrder(t *testing.T) {
 	if err != nil || ranks {
 		t.Fatalf("newRoutingPolicy() = %v, %v", ranks, err)
 	}
-	ordered := policy.order(providers, nonStreamingMode, nil, time.Time{})
+	ordered := policy.order(providers, nonStreamingMode, nil, nil, time.Time{})
 	assertProviderOrder(t, ordered, "first", "second")
 }
 
@@ -34,6 +34,16 @@ func TestLatencyRoutingRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestCostRoutingPolicyIsOptIn(t *testing.T) {
+	policy, ranksEligible, err := newRoutingPolicy(RoutingConfig{Policy: RoutingPolicyCost})
+	if err != nil {
+		t.Fatalf("newRoutingPolicy() error = %v", err)
+	}
+	if _, ok := policy.(costRoutingPolicy); !ok || !ranksEligible {
+		t.Fatalf("newRoutingPolicy() = %T, ranks eligible = %v", policy, ranksEligible)
+	}
+}
+
 func TestLatencyRoutingUsesModeSpecificMedian(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	policy := testLatencyRoutingPolicy(3, time.Minute)
@@ -43,8 +53,8 @@ func TestLatencyRoutingUsesModeSpecificMedian(t *testing.T) {
 		"second": routingSnapshot(now, []time.Duration{50, 50, 50}, []time.Duration{20, 20, 20}, []time.Duration{time.Nanosecond, time.Nanosecond, time.Nanosecond}),
 	}
 
-	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "second", "first")
-	assertProviderOrder(t, policy.order(providers, streamingMode, snapshots, now), "first", "second")
+	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "second", "first")
+	assertProviderOrder(t, policy.order(providers, streamingMode, snapshots, nil, now), "first", "second")
 }
 
 func TestLatencyRoutingPreservesOrderForUntrustedData(t *testing.T) {
@@ -74,7 +84,7 @@ func TestLatencyRoutingPreservesOrderForUntrustedData(t *testing.T) {
 	}
 	for name, snapshots := range tests {
 		t.Run(name, func(t *testing.T) {
-			assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "first", "second")
+			assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "first", "second")
 		})
 	}
 }
@@ -88,10 +98,10 @@ func TestLatencyRoutingRequiresMeaningfulImprovement(t *testing.T) {
 		"first":  routingSnapshot(now, []time.Duration{100, 100, 100}, nil, nil),
 		"second": routingSnapshot(now, []time.Duration{91, 91, 91}, nil, nil),
 	}
-	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "first", "second")
+	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "first", "second")
 
 	snapshots["second"] = routingSnapshot(now, []time.Duration{90, 90, 90}, nil, nil)
-	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "second", "first")
+	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "second", "first")
 }
 
 func TestLatencyRoutingMedianResistsOutlierAndDoesNotMutateSnapshot(t *testing.T) {
@@ -105,7 +115,7 @@ func TestLatencyRoutingMedianResistsOutlierAndDoesNotMutateSnapshot(t *testing.T
 		"second": routingSnapshot(now, secondSamples, nil, nil),
 	}
 
-	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "second", "first")
+	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "second", "first")
 	if !equalDurations(snapshots["second"].NonStreamingLatencies, secondSamples) {
 		t.Fatalf("routing mutated telemetry: %v", snapshots["second"].NonStreamingLatencies)
 	}

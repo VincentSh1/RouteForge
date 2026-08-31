@@ -69,7 +69,7 @@ func TestExplorationCadenceIsDeterministic(t *testing.T) {
 	}
 	wantFirst := []string{"first", "first", "second", "first", "first", "second"}
 	for i, want := range wantFirst {
-		ordered := policy.order(providers, nonStreamingMode, snapshots, now)
+		ordered := policy.order(providers, nonStreamingMode, snapshots, nil, now)
 		if ordered[0].Name() != want {
 			t.Fatalf("request %d first provider = %q, want %q", i+1, ordered[0].Name(), want)
 		}
@@ -91,7 +91,7 @@ func TestExplorationSelectsLargestDeficitWithStableTieBreak(t *testing.T) {
 			"second": routingSnapshot(now, repeatedDuration(100*time.Millisecond, 2), nil, nil),
 			"third":  routingSnapshot(now, repeatedDuration(100*time.Millisecond, 1), nil, nil),
 		}
-		assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "third", "first", "second")
+		assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "third", "first", "second")
 	})
 
 	t.Run("configured order breaks ties", func(t *testing.T) {
@@ -101,7 +101,7 @@ func TestExplorationSelectsLargestDeficitWithStableTieBreak(t *testing.T) {
 			"second": routingSnapshot(now, repeatedDuration(100*time.Millisecond, 1), nil, nil),
 			"third":  routingSnapshot(now, repeatedDuration(100*time.Millisecond, 1), nil, nil),
 		}
-		assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "second", "first", "third")
+		assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "second", "first", "third")
 	})
 }
 
@@ -119,7 +119,7 @@ func TestExplorationUsesFreshModeSpecificSamples(t *testing.T) {
 			"first":  routingSnapshot(now, firstComplete, firstTTFC, nil),
 			"second": routingSnapshot(now, nil, secondTTFC, nil),
 		}
-		assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "second", "first")
+		assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "second", "first")
 	})
 
 	t.Run("non-streaming samples do not warm streaming", func(t *testing.T) {
@@ -128,7 +128,7 @@ func TestExplorationUsesFreshModeSpecificSamples(t *testing.T) {
 			"first":  routingSnapshot(now, firstComplete, firstTTFC, nil),
 			"second": routingSnapshot(now, secondComplete, nil, nil),
 		}
-		assertProviderOrder(t, policy.order(providers, streamingMode, snapshots, now), "second", "first")
+		assertProviderOrder(t, policy.order(providers, streamingMode, snapshots, nil, now), "second", "first")
 	})
 
 	t.Run("stale samples resume warm-up", func(t *testing.T) {
@@ -137,7 +137,7 @@ func TestExplorationUsesFreshModeSpecificSamples(t *testing.T) {
 			"first":  routingSnapshot(now, firstComplete, nil, nil),
 			"second": routingSnapshot(now.Add(-2*time.Minute), secondComplete, nil, nil),
 		}
-		assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "second", "first")
+		assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "second", "first")
 	})
 }
 
@@ -155,10 +155,10 @@ func TestExplorationCountersAreIndependentByRequestMode(t *testing.T) {
 		"second": routingSnapshot(now, nil, nil, nil),
 	}
 
-	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "first", "second")
-	assertProviderOrder(t, policy.order(providers, streamingMode, snapshots, now), "first", "second")
-	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "second", "first")
-	assertProviderOrder(t, policy.order(providers, streamingMode, snapshots, now), "second", "first")
+	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "first", "second")
+	assertProviderOrder(t, policy.order(providers, streamingMode, snapshots, nil, now), "first", "second")
+	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "second", "first")
+	assertProviderOrder(t, policy.order(providers, streamingMode, snapshots, nil, now), "second", "first")
 }
 
 func TestExplorationStopsWhenWarmAndLatencyRankingResumes(t *testing.T) {
@@ -171,10 +171,10 @@ func TestExplorationStopsWhenWarmAndLatencyRankingResumes(t *testing.T) {
 	}
 
 	for range 3 {
-		assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "second", "first")
+		assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "second", "first")
 	}
 	snapshots["second"] = routingSnapshot(now, repeatedDuration(91*time.Millisecond, 5), nil, nil)
-	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, now), "first", "second")
+	assertProviderOrder(t, policy.order(providers, nonStreamingMode, snapshots, nil, now), "first", "second")
 }
 
 func TestCircuitOpenProviderIsNeverExplored(t *testing.T) {
@@ -249,7 +249,7 @@ func TestConcurrentExplorationCadenceIsBounded(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			ordered := policy.order(providers, nonStreamingMode, snapshots, now)
+			ordered := policy.order(providers, nonStreamingMode, snapshots, nil, now)
 			if ordered[0].Name() == "second" {
 				explorations.Add(1)
 			}

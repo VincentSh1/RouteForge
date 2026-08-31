@@ -2,7 +2,7 @@
 
 RouteForge is an OpenAI-compatible AI inference gateway written in Go. It
 supports streaming and synchronous chat completions through mock, OpenAI, and Anthropic
-providers with explicit selection, fallback, and optional latency-aware routing.
+providers with explicit selection, fallback, and optional latency- or cost-aware routing.
 
 ## API
 
@@ -12,8 +12,8 @@ providers with explicit selection, fallback, and optional latency-aware routing.
 - Streaming and non-streaming chat completions through provider interfaces
 - OpenAI-style success and error responses
 
-Authentication, persistence, caching, rate limiting, cost-aware routing, and
-observability integrations are intentionally out of scope.
+Authentication, persistence, caching, rate limiting, balanced latency-and-cost
+routing, and observability integrations are intentionally out of scope.
 
 ## Requirements
 
@@ -42,11 +42,18 @@ environment variables:
 | `ROUTEFORGE_ROUTING_POLICY` | `deterministic` |
 | `ROUTEFORGE_ROUTING_MIN_SAMPLES` | `5` |
 | `ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE` | `5m` |
+| `ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL` | `10` |
 | `ROUTEFORGE_PROVIDER` | `mock` |
 | `OPENAI_API_KEY` | unset |
 | `ANTHROPIC_API_KEY` | unset |
 | `ROUTEFORGE_MODEL_GENERAL_OPENAI` | unset |
 | `ROUTEFORGE_MODEL_GENERAL_ANTHROPIC` | unset |
+| `ROUTEFORGE_PRICE_OPENAI_INPUT_USD_PER_MILLION` | unset |
+| `ROUTEFORGE_PRICE_OPENAI_OUTPUT_USD_PER_MILLION` | unset |
+| `ROUTEFORGE_PRICE_ANTHROPIC_INPUT_USD_PER_MILLION` | unset |
+| `ROUTEFORGE_PRICE_ANTHROPIC_OUTPUT_USD_PER_MILLION` | unset |
+| `ROUTEFORGE_PRICE_MOCK_INPUT_USD_PER_MILLION` | unset |
+| `ROUTEFORGE_PRICE_MOCK_OUTPUT_USD_PER_MILLION` | unset |
 
 ## Example
 
@@ -60,8 +67,9 @@ curl http://localhost:8080/v1/chat/completions \
 ```
 
 Omitting `stream` is equivalent to setting it to `false`. Unknown JSON fields
-are ignored for client compatibility. Mock token usage values are zero and are
-not estimates.
+are ignored for client compatibility. The mock provider reports deterministic
+synthetic usage of three input and four output tokens; it does not tokenize the
+request.
 
 ## Streaming
 
@@ -117,17 +125,29 @@ falls back to the mock provider.
 ### Routing policies
 
 `ROUTEFORGE_ROUTING_POLICY=deterministic` is the default and preserves the
-configured provider order exactly. `latency` is an opt-in policy for auto mode;
-explicit provider selection is never redirected by telemetry.
+configured provider order exactly. `latency` and `cost` are opt-in policies for
+auto mode. Explicit provider selection is never redirected by either policy.
 
 The latency policy uses the median of recent synchronous completion latency for
 non-streaming requests and recent time to first assistant content for streaming
-requests. It does not mix those samples or use total stream duration. Every
-circuit-eligible candidate must have at least
+requests. It does not mix those samples or use total stream duration. Latency
+comparisons require every circuit-eligible candidate to have at least
 `ROUTEFORGE_ROUTING_MIN_SAMPLES` samples no older than
-`ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE`; otherwise the request keeps deterministic
-order. This cold-start rule ensures an unmeasured provider is not permanently
-penalized and one fast observation cannot dominate routing.
+`ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE`.
+
+While an eligible provider lacks those samples, RouteForge deterministically
+uses every `ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL`th under-sampled routing
+decision for warm-up. The provider with the largest fresh-sample deficit moves
+to the front for that request; configured order breaks equal deficits. Other
+requests keep Phase 4C ordering. Non-streaming and streaming warm-up use
+separate counters and their respective latency or TTFC samples. This is
+deterministic exploration, not random or bandit routing.
+
+Circuit-open providers are excluded before exploration. Circuit inspection
+does not reserve a HALF_OPEN trial; the normal atomic admission check remains
+authoritative immediately before an attempt. Exploration stops affecting order
+as soon as every eligible provider has enough fresh samples, and it may resume
+when samples expire.
 
 To avoid switching on minor noise, the fastest candidate must be at least 10%
 faster than the deterministic-first candidate. When it is, RouteForge moves
@@ -135,6 +155,27 @@ only that candidate to the front and preserves the relative fallback order of
 the remaining providers. Circuit eligibility is evaluated first, and atomic
 HALF_OPEN admission remains authoritative. The ordered candidate list is
 calculated once per request and is not reranked during fallback.
+
+Exploration counters and telemetry are process-local, bounded, and reset when
+RouteForge restarts. Exploration applies only to latency-policy auto routing;
+deterministic and explicit-provider modes are unchanged.
+
+The cost policy compares the configured input and output rates for each
+candidate's resolved provider-native model. RouteForge does not inspect prompt
+text, estimate tokens, or use historical request totals while making this
+decision. Provider A can move ahead of Provider B only when A's input rate and
+output rate are both no greater than B's and at least one rate is strictly
+lower. For example, fictional rates of `2` input and `8` output dominate rates
+of `3` input and `12` output.
+
+When one provider has cheaper input but more expensive output, neither provider
+dominates; configured order is preserved because RouteForge does not invent an
+input/output weighting. Identical rates, incomplete rates, and missing pricing
+also preserve stable configured preference. Missing pricing never means free
+and never excludes a provider from fallback. Circuit eligibility is applied
+before cost ordering, and the resulting candidate order remains fixed for the
+request. Cost routing requires no latency warm-up and does not use latency
+exploration.
 
 ## Passive provider health
 
@@ -182,6 +223,49 @@ be excluded from opt-in latency routing. It contains no prompts, message
 content, bodies, credentials, headers, or raw provider errors. Measurements
 reset when the process restarts. The default routing policy remains
 deterministic; no telemetry endpoint or observability integration is provided.
+
+## Usage and estimated cost accounting
+
+Every actual provider attempt can contribute provider-reported token usage to
+a separate process-local accounting component. OpenAI prompt and completion
+tokens and Anthropic input and output tokens are normalized as input, output,
+and total usage. Missing usage remains unavailable rather than becoming a
+fabricated zero. Fallback attempts are accounted independently using their
+resolved provider-native model identifiers; circuit-skipped providers and
+model-resolution failures create no accounting attempt.
+
+Streaming usage is consumed internally. OpenAI usage-only stream events and
+Anthropic message lifecycle usage do not become assistant content, do not count
+as time to first content, and do not commit the downstream SSE response. Usage
+reported before a later provider failure or client cancellation is retained,
+while the terminal outcome remains a failure or cancellation.
+
+Estimated cost is optional and uses configured input/output USD rates per one
+million tokens. The following values are placeholders, not statements of
+current provider pricing:
+
+```sh
+export ROUTEFORGE_PRICE_OPENAI_INPUT_USD_PER_MILLION="1.234567"
+export ROUTEFORGE_PRICE_OPENAI_OUTPUT_USD_PER_MILLION="2.345678"
+export ROUTEFORGE_PRICE_ANTHROPIC_INPUT_USD_PER_MILLION="3.456789"
+export ROUTEFORGE_PRICE_ANTHROPIC_OUTPUT_USD_PER_MILLION="4.567890"
+```
+
+Configuration accepts up to six decimal places. RouteForge converts rates to
+integer micro-USD and rounds each attempt's combined input/output estimate
+half-up to the nearest micro-USD. Missing usage or a required configured rate
+makes the attempt cost unavailable, not zero. Actual usage and accumulated
+attempt cost remain observational: the opt-in cost policy compares configured
+resolved-model rates before an attempt and does not route from these historical
+accounting totals. Pricing never affects deterministic routing, latency
+routing, latency exploration, or fallback eligibility.
+
+Accounting retains only bounded provider/model aggregates and resets on
+restart. It stores no prompts, response content, credentials, headers, user
+identifiers, or raw provider errors, and it has no public endpoint. Estimates
+may differ from provider invoices and do not model cached-token discounts,
+prompt caching, batch rates, reasoning-token categories, credits, promotions,
+or account-specific pricing.
 
 ## Model resolution
 
