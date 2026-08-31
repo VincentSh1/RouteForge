@@ -102,6 +102,35 @@ func TestLoadRejectsInvalidRoutingConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadPricing(t *testing.T) {
+	setProviderDefaults(t)
+	t.Setenv("ROUTEFORGE_PRICE_OPENAI_INPUT_USD_PER_MILLION", "1.25")
+	t.Setenv("ROUTEFORGE_PRICE_OPENAI_OUTPUT_USD_PER_MILLION", "2.5")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.OpenAIPricing.InputMicroUSDPerMillion == nil || *cfg.OpenAIPricing.InputMicroUSDPerMillion != 1_250_000 ||
+		cfg.OpenAIPricing.OutputMicroUSDPerMillion == nil || *cfg.OpenAIPricing.OutputMicroUSDPerMillion != 2_500_000 {
+		t.Fatalf("OpenAI pricing = %+v", cfg.OpenAIPricing)
+	}
+	if cfg.AnthropicPricing.InputMicroUSDPerMillion != nil || cfg.MockPricing.OutputMicroUSDPerMillion != nil {
+		t.Fatal("missing pricing was fabricated")
+	}
+}
+
+func TestLoadRejectsInvalidPricing(t *testing.T) {
+	for _, value := range []string{"-1", "1.0000001", "not-a-price"} {
+		t.Run(value, func(t *testing.T) {
+			setProviderDefaults(t)
+			t.Setenv("ROUTEFORGE_PRICE_ANTHROPIC_INPUT_USD_PER_MILLION", value)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil")
+			}
+		})
+	}
+}
+
 func TestLoadRejectsInvalidDuration(t *testing.T) {
 	setProviderDefaults(t)
 	t.Setenv("ROUTEFORGE_READ_TIMEOUT", "never")
@@ -201,4 +230,8 @@ func setProviderDefaults(t *testing.T) {
 	t.Setenv("ROUTEFORGE_ROUTING_MIN_SAMPLES", "")
 	t.Setenv("ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", "")
 	t.Setenv("ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL", "")
+	for _, providerName := range []string{"OPENAI", "ANTHROPIC", "MOCK"} {
+		t.Setenv("ROUTEFORGE_PRICE_"+providerName+"_INPUT_USD_PER_MILLION", "")
+		t.Setenv("ROUTEFORGE_PRICE_"+providerName+"_OUTPUT_USD_PER_MILLION", "")
+	}
 }

@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/VincentSh1/RouteForge/internal/accounting"
 )
 
 const (
@@ -54,6 +56,9 @@ type Config struct {
 	AnthropicAPIKey            string
 	GeneralOpenAIModel         string
 	GeneralAnthropicModel      string
+	OpenAIPricing              accounting.Rates
+	AnthropicPricing           accounting.Rates
+	MockPricing                accounting.Rates
 }
 
 type ValidationError struct {
@@ -82,6 +87,16 @@ func Load() (Config, error) {
 		AnthropicAPIKey:            os.Getenv("ANTHROPIC_API_KEY"),
 		GeneralOpenAIModel:         strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_OPENAI")),
 		GeneralAnthropicModel:      strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_ANTHROPIC")),
+	}
+	var err error
+	if cfg.OpenAIPricing, err = loadPricing("OPENAI"); err != nil {
+		return Config{}, err
+	}
+	if cfg.AnthropicPricing, err = loadPricing("ANTHROPIC"); err != nil {
+		return Config{}, err
+	}
+	if cfg.MockPricing, err = loadPricing("MOCK"); err != nil {
+		return Config{}, err
 	}
 
 	values := []struct {
@@ -173,4 +188,28 @@ func envOrDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func loadPricing(providerName string) (accounting.Rates, error) {
+	input, err := loadPrice("ROUTEFORGE_PRICE_" + providerName + "_INPUT_USD_PER_MILLION")
+	if err != nil {
+		return accounting.Rates{}, err
+	}
+	output, err := loadPrice("ROUTEFORGE_PRICE_" + providerName + "_OUTPUT_USD_PER_MILLION")
+	if err != nil {
+		return accounting.Rates{}, err
+	}
+	return accounting.Rates{InputMicroUSDPerMillion: input, OutputMicroUSDPerMillion: output}, nil
+}
+
+func loadPrice(key string) (*uint64, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	price, err := accounting.ParseUSDPerMillion(raw)
+	if err != nil {
+		return nil, validationError("%s must be a non-negative USD amount with at most six decimal places", key)
+	}
+	return &price, nil
 }

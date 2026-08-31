@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/VincentSh1/RouteForge/internal/accounting"
 	"github.com/VincentSh1/RouteForge/internal/config"
 	"github.com/VincentSh1/RouteForge/internal/gateway"
 	"github.com/VincentSh1/RouteForge/internal/httpapi"
@@ -96,7 +97,9 @@ func buildService(cfg config.Config) (*gateway.Service, error) {
 		if !ok {
 			return nil, fmt.Errorf("configured provider is unavailable")
 		}
-		return gateway.NewWithCircuitBreaker(selected, resolver, circuitConfig), nil
+		service := gateway.NewWithCircuitBreaker(selected, resolver, circuitConfig)
+		service.SetPricing(configuredPrices(cfg))
+		return service, nil
 	}
 
 	orderedNames := []string{openaiadapter.Name, anthropic.Name}
@@ -109,10 +112,28 @@ func buildService(cfg config.Config) (*gateway.Service, error) {
 	if len(ordered) == 0 {
 		return nil, fmt.Errorf("no automatic providers are configured")
 	}
-	return gateway.NewAutoWithRouting(resolver, circuitConfig, gateway.RoutingConfig{
+	service, err := gateway.NewAutoWithRouting(resolver, circuitConfig, gateway.RoutingConfig{
 		Policy:              cfg.RoutingPolicy,
 		MinSamples:          cfg.RoutingMinSamples,
 		SampleMaxAge:        cfg.RoutingSampleMaxAge,
 		ExplorationInterval: cfg.RoutingExplorationInterval,
 	}, ordered...)
+	if err != nil {
+		return nil, err
+	}
+	service.SetPricing(configuredPrices(cfg))
+	return service, nil
+}
+
+func configuredPrices(cfg config.Config) accounting.PriceBook {
+	prices := accounting.PriceBook{
+		{Provider: mock.Name, Model: "mock-model"}: cfg.MockPricing,
+	}
+	if cfg.GeneralOpenAIModel != "" {
+		prices[accounting.Key{Provider: openaiadapter.Name, Model: cfg.GeneralOpenAIModel}] = cfg.OpenAIPricing
+	}
+	if cfg.GeneralAnthropicModel != "" {
+		prices[accounting.Key{Provider: anthropic.Name, Model: cfg.GeneralAnthropicModel}] = cfg.AnthropicPricing
+	}
+	return prices
 }
