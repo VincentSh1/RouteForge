@@ -36,30 +36,32 @@ const (
 	RoutingPolicyDeterministic = "deterministic"
 	RoutingPolicyLatency       = "latency"
 	RoutingPolicyCost          = "cost"
+	RoutingPolicyCostLatency   = "cost_latency"
 )
 
 type Config struct {
-	Addr                       string
-	ReadTimeout                time.Duration
-	WriteTimeout               time.Duration
-	IdleTimeout                time.Duration
-	ShutdownTimeout            time.Duration
-	ProviderTimeout            time.Duration
-	StreamIdleTimeout          time.Duration
-	CircuitFailureThreshold    int
-	CircuitOpenDuration        time.Duration
-	RoutingPolicy              string
-	RoutingMinSamples          int
-	RoutingSampleMaxAge        time.Duration
-	RoutingExplorationInterval int
-	Provider                   string
-	OpenAIAPIKey               string
-	AnthropicAPIKey            string
-	GeneralOpenAIModel         string
-	GeneralAnthropicModel      string
-	OpenAIPricing              accounting.Rates
-	AnthropicPricing           accounting.Rates
-	MockPricing                accounting.Rates
+	Addr                                string
+	ReadTimeout                         time.Duration
+	WriteTimeout                        time.Duration
+	IdleTimeout                         time.Duration
+	ShutdownTimeout                     time.Duration
+	ProviderTimeout                     time.Duration
+	StreamIdleTimeout                   time.Duration
+	CircuitFailureThreshold             int
+	CircuitOpenDuration                 time.Duration
+	RoutingPolicy                       string
+	RoutingMinSamples                   int
+	RoutingSampleMaxAge                 time.Duration
+	RoutingExplorationInterval          int
+	RoutingMaxLatencyOverFastestPercent *uint64
+	Provider                            string
+	OpenAIAPIKey                        string
+	AnthropicAPIKey                     string
+	GeneralOpenAIModel                  string
+	GeneralAnthropicModel               string
+	OpenAIPricing                       accounting.Rates
+	AnthropicPricing                    accounting.Rates
+	MockPricing                         accounting.Rates
 }
 
 type ValidationError struct {
@@ -134,6 +136,17 @@ func Load() (Config, error) {
 		}
 		cfg.RoutingExplorationInterval = interval
 	}
+	if raw, ok := os.LookupEnv("ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT"); ok && strings.TrimSpace(raw) != "" {
+		trimmed := strings.TrimSpace(raw)
+		if strings.HasPrefix(trimmed, "-") || strings.HasPrefix(trimmed, "+") {
+			return Config{}, validationError("ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT must be a non-negative integer")
+		}
+		percent, err := strconv.ParseUint(trimmed, 10, 64)
+		if err != nil {
+			return Config{}, validationError("ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT must be a non-negative integer")
+		}
+		cfg.RoutingMaxLatencyOverFastestPercent = &percent
+	}
 	for _, value := range values {
 		raw := os.Getenv(value.key)
 		if raw == "" {
@@ -151,8 +164,12 @@ func Load() (Config, error) {
 	}
 	switch cfg.RoutingPolicy {
 	case RoutingPolicyDeterministic, RoutingPolicyLatency, RoutingPolicyCost:
+	case RoutingPolicyCostLatency:
+		if cfg.RoutingMaxLatencyOverFastestPercent == nil {
+			return Config{}, validationError("ROUTEFORGE_ROUTING_POLICY=cost_latency requires ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT")
+		}
 	default:
-		return Config{}, validationError("ROUTEFORGE_ROUTING_POLICY must be deterministic, latency, or cost")
+		return Config{}, validationError("ROUTEFORGE_ROUTING_POLICY must be deterministic, latency, cost, or cost_latency")
 	}
 	switch cfg.Provider {
 	case ProviderMock:

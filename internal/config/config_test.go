@@ -21,6 +21,7 @@ func TestLoadDefaults(t *testing.T) {
 		"ROUTEFORGE_ROUTING_MIN_SAMPLES",
 		"ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE",
 		"ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL",
+		"ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -112,6 +113,67 @@ func TestLoadAcceptsCostRoutingPolicy(t *testing.T) {
 	}
 	if cfg.RoutingPolicy != RoutingPolicyCost {
 		t.Fatalf("RoutingPolicy = %q, want %q", cfg.RoutingPolicy, RoutingPolicyCost)
+	}
+}
+
+func TestLoadCostLatencyRoutingPolicy(t *testing.T) {
+	t.Run("valid tolerance", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_ROUTING_POLICY", RoutingPolicyCostLatency)
+		t.Setenv("ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT", "20")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.RoutingMaxLatencyOverFastestPercent == nil || *cfg.RoutingMaxLatencyOverFastestPercent != 20 {
+			t.Fatalf("tolerance = %v", cfg.RoutingMaxLatencyOverFastestPercent)
+		}
+	})
+
+	t.Run("zero tolerance", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_ROUTING_POLICY", RoutingPolicyCostLatency)
+		t.Setenv("ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT", "0")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.RoutingMaxLatencyOverFastestPercent == nil || *cfg.RoutingMaxLatencyOverFastestPercent != 0 {
+			t.Fatalf("tolerance = %v", cfg.RoutingMaxLatencyOverFastestPercent)
+		}
+	})
+
+	t.Run("required tolerance", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_ROUTING_POLICY", RoutingPolicyCostLatency)
+		if _, err := Load(); err == nil {
+			t.Fatal("Load() error = nil")
+		}
+	})
+
+	for _, value := range []string{"-1", "+1", "1.5", "many"} {
+		t.Run("invalid "+value, func(t *testing.T) {
+			setProviderDefaults(t)
+			t.Setenv("ROUTEFORGE_ROUTING_POLICY", RoutingPolicyCostLatency)
+			t.Setenv("ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT", value)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil")
+			}
+		})
+	}
+}
+
+func TestOtherRoutingPoliciesDoNotRequireCostLatencyTolerance(t *testing.T) {
+	for _, policy := range []string{RoutingPolicyDeterministic, RoutingPolicyLatency, RoutingPolicyCost} {
+		t.Run(policy, func(t *testing.T) {
+			setProviderDefaults(t)
+			t.Setenv("ROUTEFORGE_ROUTING_POLICY", policy)
+			if _, err := Load(); err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+		})
 	}
 }
 
@@ -243,6 +305,7 @@ func setProviderDefaults(t *testing.T) {
 	t.Setenv("ROUTEFORGE_ROUTING_MIN_SAMPLES", "")
 	t.Setenv("ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", "")
 	t.Setenv("ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL", "")
+	t.Setenv("ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT", "")
 	for _, providerName := range []string{"OPENAI", "ANTHROPIC", "MOCK"} {
 		t.Setenv("ROUTEFORGE_PRICE_"+providerName+"_INPUT_USD_PER_MILLION", "")
 		t.Setenv("ROUTEFORGE_PRICE_"+providerName+"_OUTPUT_USD_PER_MILLION", "")

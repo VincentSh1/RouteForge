@@ -113,10 +113,11 @@ func buildService(cfg config.Config) (*gateway.Service, error) {
 		return nil, fmt.Errorf("no automatic providers are configured")
 	}
 	service, err := gateway.NewAutoWithRouting(resolver, circuitConfig, gateway.RoutingConfig{
-		Policy:              cfg.RoutingPolicy,
-		MinSamples:          cfg.RoutingMinSamples,
-		SampleMaxAge:        cfg.RoutingSampleMaxAge,
-		ExplorationInterval: cfg.RoutingExplorationInterval,
+		Policy:                       cfg.RoutingPolicy,
+		MinSamples:                   cfg.RoutingMinSamples,
+		SampleMaxAge:                 cfg.RoutingSampleMaxAge,
+		ExplorationInterval:          cfg.RoutingExplorationInterval,
+		MaxLatencyOverFastestPercent: cfg.RoutingMaxLatencyOverFastestPercent,
 	}, ordered...)
 	if err != nil {
 		return nil, err
