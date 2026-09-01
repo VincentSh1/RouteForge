@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"math/bits"
 	"sort"
 	"sync"
 	"time"
@@ -14,15 +15,17 @@ const (
 	RoutingPolicyDeterministic = "deterministic"
 	RoutingPolicyLatency       = "latency"
 	RoutingPolicyCost          = "cost"
+	RoutingPolicyCostLatency   = "cost_latency"
 
 	routingSwitchMarginDivisor = 10 // An alternative must be at least 10% faster.
 )
 
 type RoutingConfig struct {
-	Policy              string
-	MinSamples          int
-	SampleMaxAge        time.Duration
-	ExplorationInterval int
+	Policy                       string
+	MinSamples                   int
+	SampleMaxAge                 time.Duration
+	ExplorationInterval          int
+	MaxLatencyOverFastestPercent *uint64
 }
 
 type requestMode uint8
@@ -45,6 +48,17 @@ func (deterministicRoutingPolicy) order(candidates []provider.Provider, _ reques
 type costRoutingPolicy struct{}
 
 func (costRoutingPolicy) order(candidates []provider.Provider, _ requestMode, _ map[string]ProviderTelemetrySnapshot, prices map[string]accounting.Rates, _ time.Time) []provider.Provider {
+	return orderByPriceDominance(candidates, prices)
+}
+
+func (costRoutingPolicy) usesPricing() {}
+
+type pricingRoutingPolicy interface {
+	routingPolicy
+	usesPricing()
+}
+
+func orderByPriceDominance(candidates []provider.Provider, prices map[string]accounting.Rates) []provider.Provider {
 	ordered := append([]provider.Provider(nil), candidates...)
 	if len(ordered) < 2 {
 		return ordered
@@ -106,30 +120,52 @@ type latencyRoutingPolicy struct {
 	explorationCounts   [2]int
 }
 
+type costLatencyRoutingPolicy struct {
+	latency                      *latencyRoutingPolicy
+	maxLatencyOverFastestPercent uint64
+}
+
 func newRoutingPolicy(config RoutingConfig) (routingPolicy, bool, error) {
 	switch config.Policy {
 	case "", RoutingPolicyDeterministic:
 		return deterministicRoutingPolicy{}, false, nil
 	case RoutingPolicyLatency:
-		if config.MinSamples <= 0 {
-			return nil, false, fmt.Errorf("routing minimum samples must be positive")
-		}
-		if config.SampleMaxAge <= 0 {
-			return nil, false, fmt.Errorf("routing sample maximum age must be positive")
-		}
-		if config.ExplorationInterval <= 0 {
-			return nil, false, fmt.Errorf("routing exploration interval must be positive")
-		}
-		return &latencyRoutingPolicy{
-			minSamples:          config.MinSamples,
-			sampleMaxAge:        config.SampleMaxAge,
-			explorationInterval: config.ExplorationInterval,
-		}, true, nil
+		policy, err := newLatencyRoutingPolicy(config)
+		return policy, true, err
 	case RoutingPolicyCost:
 		return costRoutingPolicy{}, true, nil
+	case RoutingPolicyCostLatency:
+		if config.MaxLatencyOverFastestPercent == nil {
+			return nil, false, fmt.Errorf("routing maximum latency over fastest percent is required")
+		}
+		latency, err := newLatencyRoutingPolicy(config)
+		if err != nil {
+			return nil, false, err
+		}
+		return &costLatencyRoutingPolicy{
+			latency:                      latency,
+			maxLatencyOverFastestPercent: *config.MaxLatencyOverFastestPercent,
+		}, true, nil
 	default:
 		return nil, false, fmt.Errorf("unknown routing policy")
 	}
+}
+
+func newLatencyRoutingPolicy(config RoutingConfig) (*latencyRoutingPolicy, error) {
+	if config.MinSamples <= 0 {
+		return nil, fmt.Errorf("routing minimum samples must be positive")
+	}
+	if config.SampleMaxAge <= 0 {
+		return nil, fmt.Errorf("routing sample maximum age must be positive")
+	}
+	if config.ExplorationInterval <= 0 {
+		return nil, fmt.Errorf("routing exploration interval must be positive")
+	}
+	return &latencyRoutingPolicy{
+		minSamples:          config.MinSamples,
+		sampleMaxAge:        config.SampleMaxAge,
+		explorationInterval: config.ExplorationInterval,
+	}, nil
 }
 
 func (p *latencyRoutingPolicy) order(candidates []provider.Provider, mode requestMode, snapshots map[string]ProviderTelemetrySnapshot, _ map[string]accounting.Rates, now time.Time) []provider.Provider {
@@ -138,26 +174,7 @@ func (p *latencyRoutingPolicy) order(candidates []provider.Provider, mode reques
 		return ordered
 	}
 
-	medians := make([]time.Duration, len(ordered))
-	explorationCandidate := -1
-	largestDeficit := 0
-	for i, candidate := range ordered {
-		snapshot := snapshots[candidate.Name()]
-		samples := recentLatencySamples(relevantLatency(snapshot, mode), now, p.sampleMaxAge)
-		if len(samples) < p.minSamples {
-			deficit := p.minSamples - len(samples)
-			if deficit > largestDeficit {
-				largestDeficit = deficit
-				explorationCandidate = i
-			}
-			continue
-		}
-		durations := make([]time.Duration, len(samples))
-		for j, sample := range samples {
-			durations[j] = sample.Duration
-		}
-		medians[i] = medianDuration(durations)
-	}
+	medians, explorationCandidate := p.candidateMedians(ordered, mode, snapshots, now)
 	if explorationCandidate >= 0 {
 		if p.explorationDue(mode) {
 			moveProviderToFront(ordered, explorationCandidate)
@@ -177,6 +194,82 @@ func (p *latencyRoutingPolicy) order(candidates []provider.Provider, mode reques
 
 	moveProviderToFront(ordered, best)
 	return ordered
+}
+
+func (p *latencyRoutingPolicy) candidateMedians(candidates []provider.Provider, mode requestMode, snapshots map[string]ProviderTelemetrySnapshot, now time.Time) ([]time.Duration, int) {
+	medians := make([]time.Duration, len(candidates))
+	explorationCandidate := -1
+	largestDeficit := 0
+	for i, candidate := range candidates {
+		snapshot := snapshots[candidate.Name()]
+		samples := recentLatencySamples(relevantLatency(snapshot, mode), now, p.sampleMaxAge)
+		if len(samples) < p.minSamples {
+			deficit := p.minSamples - len(samples)
+			if deficit > largestDeficit {
+				largestDeficit = deficit
+				explorationCandidate = i
+			}
+			continue
+		}
+		durations := make([]time.Duration, len(samples))
+		for j, sample := range samples {
+			durations[j] = sample.Duration
+		}
+		medians[i] = medianDuration(durations)
+	}
+	return medians, explorationCandidate
+}
+
+func (p *costLatencyRoutingPolicy) order(candidates []provider.Provider, mode requestMode, snapshots map[string]ProviderTelemetrySnapshot, prices map[string]accounting.Rates, now time.Time) []provider.Provider {
+	ordered := append([]provider.Provider(nil), candidates...)
+	if len(ordered) < 2 {
+		return ordered
+	}
+
+	medians, explorationCandidate := p.latency.candidateMedians(ordered, mode, snapshots, now)
+	if explorationCandidate >= 0 {
+		if p.latency.explorationDue(mode) {
+			moveProviderToFront(ordered, explorationCandidate)
+		}
+		return ordered
+	}
+
+	fastest := medians[0]
+	for _, median := range medians[1:] {
+		if median < fastest {
+			fastest = median
+		}
+	}
+
+	acceptable := make([]provider.Provider, 0, len(ordered))
+	outside := make([]provider.Provider, 0, len(ordered))
+	for i, candidate := range ordered {
+		if withinLatencyTolerance(medians[i], fastest, p.maxLatencyOverFastestPercent) {
+			acceptable = append(acceptable, candidate)
+		} else {
+			outside = append(outside, candidate)
+		}
+	}
+
+	// Latency is a constraint before price dominance because RouteForge has no
+	// principled conversion between elapsed time and monetary cost.
+	acceptable = orderByPriceDominance(acceptable, prices)
+	return append(acceptable, outside...)
+}
+
+func (*costLatencyRoutingPolicy) usesPricing() {}
+
+func withinLatencyTolerance(candidate, fastest time.Duration, percent uint64) bool {
+	if candidate <= fastest {
+		return true
+	}
+	if fastest <= 0 {
+		return false
+	}
+
+	differenceHigh, differenceLow := bits.Mul64(uint64(candidate-fastest), 100)
+	limitHigh, limitLow := bits.Mul64(uint64(fastest), percent)
+	return differenceHigh < limitHigh || differenceHigh == limitHigh && differenceLow <= limitLow
 }
 
 func (p *latencyRoutingPolicy) explorationDue(mode requestMode) bool {

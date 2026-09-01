@@ -349,7 +349,7 @@ func (s *Service) orderedProviders(mode requestMode, requestModel string) []prov
 }
 
 func (s *Service) candidatePrices(requestModel string, candidates []provider.Provider) map[string]accounting.Rates {
-	if _, ok := s.routing.(costRoutingPolicy); !ok {
+	if _, ok := s.routing.(pricingRoutingPolicy); !ok {
 		return nil
 	}
 
