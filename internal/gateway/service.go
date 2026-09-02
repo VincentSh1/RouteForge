@@ -39,6 +39,11 @@ func (e *UnsupportedRoleError) Error() string {
 	return fmt.Sprintf("messages[%d].role %q is not supported", e.Index, e.Role)
 }
 
+// Clock supplies time to request telemetry and circuit-breaker state.
+type Clock interface {
+	Now() time.Time
+}
+
 type Service struct {
 	providers    []provider.Provider
 	resolver     *model.Resolver
@@ -100,10 +105,17 @@ func NewAutoWithCircuitBreaker(resolver *model.Resolver, config CircuitConfig, p
 }
 
 func NewAutoWithRouting(resolver *model.Resolver, circuitConfig CircuitConfig, routingConfig RoutingConfig, providers ...provider.Provider) (*Service, error) {
-	return newAutoService(resolver, circuitConfig, routingConfig, providers...)
+	return newAutoService(resolver, circuitConfig, routingConfig, time.Now, providers...)
 }
 
-func newAutoService(resolver *model.Resolver, circuitConfig CircuitConfig, routingConfig RoutingConfig, providers ...provider.Provider) (*Service, error) {
+func NewAutoWithRoutingClock(resolver *model.Resolver, circuitConfig CircuitConfig, routingConfig RoutingConfig, clock Clock, providers ...provider.Provider) (*Service, error) {
+	if clock == nil {
+		return nil, fmt.Errorf("gateway clock is required")
+	}
+	return newAutoService(resolver, circuitConfig, routingConfig, clock.Now, providers...)
+}
+
+func newAutoService(resolver *model.Resolver, circuitConfig CircuitConfig, routingConfig RoutingConfig, now func() time.Time, providers ...provider.Provider) (*Service, error) {
 	if resolver == nil {
 		resolver = model.New(nil)
 	}
@@ -115,11 +127,11 @@ func newAutoService(resolver *model.Resolver, circuitConfig CircuitConfig, routi
 		providers:    providers,
 		resolver:     resolver,
 		fallback:     true,
-		health:       trackerFor(providers, circuitConfig),
-		telemetry:    telemetryFor(providers),
+		health:       newHealthTracker(providerNames(providers), circuitConfig, now),
+		telemetry:    newTelemetryTracker(providerNames(providers), defaultTelemetrySampleCapacity, now),
 		routing:      routing,
 		rankEligible: rankEligible,
-		now:          time.Now,
+		now:          now,
 		accounting:   accounting.NewTracker(nil, accounting.DefaultModelCapacity),
 	}, nil
 }
@@ -407,6 +419,11 @@ func (s *Service) SetPricing(prices accounting.PriceBook) {
 
 func (s *Service) AccountingSnapshot() accounting.Snapshot {
 	return s.accounting.Snapshot()
+}
+
+// ProviderEligible reports circuit eligibility without reserving a HALF_OPEN trial.
+func (s *Service) ProviderEligible(providerName string) bool {
+	return s.health.eligible(providerName)
 }
 
 func mergeUsage(current, incoming *openai.Usage) *openai.Usage {
