@@ -41,7 +41,10 @@ func RunComparison(scenario Scenario, state State, policies []string) (Compariso
 		policies = SupportedPolicies
 	}
 
-	comparison := Comparison{Scenario: scenario.Name, State: state, Results: make([]Result, 0, len(policies))}
+	comparison := Comparison{
+		Scenario: scenario.Name, ScenarioVersion: scenario.Version, State: state,
+		Results: make([]Result, 0, len(policies)),
+	}
 	for _, policy := range policies {
 		if !supportedPolicy(policy) {
 			return Comparison{}, fmt.Errorf("unsupported benchmark policy %q", policy)

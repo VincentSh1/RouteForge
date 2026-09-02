@@ -8,9 +8,10 @@ import (
 )
 
 type Comparison struct {
-	Scenario string   `json:"scenario"`
-	State    State    `json:"state"`
-	Results  []Result `json:"results"`
+	Scenario        string   `json:"scenario"`
+	ScenarioVersion int      `json:"scenario_version"`
+	State           State    `json:"state"`
+	Results         []Result `json:"results"`
 }
 
 type Result struct {

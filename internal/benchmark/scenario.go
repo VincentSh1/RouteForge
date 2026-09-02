@@ -55,6 +55,7 @@ type Request struct {
 }
 
 type Scenario struct {
+	Version         int
 	Name            string
 	Mode            Mode
 	Providers       []ProviderSpec
@@ -66,6 +67,9 @@ type Scenario struct {
 }
 
 func (s Scenario) Validate() error {
+	if s.Version != 1 {
+		return fmt.Errorf("scenario version must be 1")
+	}
 	if s.Name == "" {
 		return fmt.Errorf("scenario name is required")
 	}
@@ -110,6 +114,11 @@ func (s Scenario) Validate() error {
 			}
 			if err := validateCondition(s.Mode, condition); err != nil {
 				return fmt.Errorf("request %q provider %q: %w", request.ID, providerName, err)
+			}
+		}
+		for providerName := range request.Conditions {
+			if _, ok := providers[providerName]; !ok {
+				return fmt.Errorf("request %q contains unknown provider %q", request.ID, providerName)
 			}
 		}
 	}
