@@ -12,7 +12,10 @@ import (
 )
 
 func TestBenchmarkIsReproducibleAndPolicyStateIsolated(t *testing.T) {
-	scenario := coldStartScenario()
+	scenario, err := BuiltInScenario("cold_start")
+	if err != nil {
+		t.Fatalf("BuiltInScenario() error = %v", err)
+	}
 	first, err := RunComparison(scenario, StateCold, nil)
 	if err != nil {
 		t.Fatalf("RunComparison() error = %v", err)
@@ -175,7 +178,10 @@ func TestStreamingMetricsPreserveCommitmentAndTTFC(t *testing.T) {
 }
 
 func TestColdStartExplorationAndWarmStateAreReportedSeparately(t *testing.T) {
-	scenario := coldStartScenario()
+	scenario, err := BuiltInScenario("cold_start")
+	if err != nil {
+		t.Fatalf("BuiltInScenario() error = %v", err)
+	}
 	cold, err := RunComparison(scenario, StateCold, []string{gateway.RoutingPolicyDeterministic, gateway.RoutingPolicyLatency})
 	if err != nil {
 		t.Fatalf("cold RunComparison() error = %v", err)

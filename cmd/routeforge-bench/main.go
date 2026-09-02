@@ -15,13 +15,20 @@ type output struct {
 }
 
 func main() {
-	scenarioName := flag.String("scenario", "stable", "built-in scenario name or all")
+	scenarioName := flag.String("scenario", "", "built-in scenario name or all (default stable)")
+	scenarioFile := flag.String("scenario-file", "", "path to an offline v1 JSON scenario")
 	stateName := flag.String("state", string(benchmarkpkg.StateWarm), "benchmark state: cold or warm")
-	policyNames := flag.String("policies", strings.Join(benchmarkpkg.SupportedPolicies, ","), "comma-separated routing policies")
+	policyName := flag.String("policy", "", "single routing policy")
+	policyNames := flag.String("policies", "", "comma-separated routing policies (default all)")
 	pretty := flag.Bool("pretty", true, "indent JSON output")
 	flag.Parse()
 
-	result, err := run(*scenarioName, benchmarkpkg.State(*stateName), splitPolicies(*policyNames))
+	policies, err := selectPolicies(*policyName, *policyNames)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "routeforge-bench:", err)
+		os.Exit(1)
+	}
+	result, err := run(*scenarioName, *scenarioFile, benchmarkpkg.State(*stateName), policies)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "routeforge-bench:", err)
 		os.Exit(1)
@@ -37,7 +44,24 @@ func main() {
 	}
 }
 
-func run(scenarioName string, state benchmarkpkg.State, policies []string) (output, error) {
+func run(scenarioName, scenarioFile string, state benchmarkpkg.State, policies []string) (output, error) {
+	if scenarioName != "" && scenarioFile != "" {
+		return output{}, fmt.Errorf("-scenario and -scenario-file cannot be used together")
+	}
+	if scenarioFile != "" {
+		scenario, err := benchmarkpkg.LoadScenarioFile(scenarioFile)
+		if err != nil {
+			return output{}, err
+		}
+		comparison, err := benchmarkpkg.RunComparison(scenario, state, policies)
+		if err != nil {
+			return output{}, err
+		}
+		return output{Comparisons: []benchmarkpkg.Comparison{comparison}}, nil
+	}
+	if scenarioName == "" {
+		scenarioName = "stable"
+	}
 	names := []string{scenarioName}
 	if scenarioName == "all" {
 		names = benchmarkpkg.BuiltInScenarioNames
@@ -67,4 +91,14 @@ func splitPolicies(value string) []string {
 		}
 	}
 	return policies
+}
+
+func selectPolicies(single, multiple string) ([]string, error) {
+	if strings.TrimSpace(single) != "" && strings.TrimSpace(multiple) != "" {
+		return nil, fmt.Errorf("-policy and -policies cannot be used together")
+	}
+	if policy := strings.TrimSpace(single); policy != "" {
+		return []string{policy}, nil
+	}
+	return splitPolicies(multiple), nil
 }
