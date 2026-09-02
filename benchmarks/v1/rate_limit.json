@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "name": "rate_limit",
+  "mode": "non_streaming",
+  "providers": [
+    {"name": "openai", "model": "benchmark-openai", "input_price_usd_per_million": "1", "output_price_usd_per_million": "4"},
+    {"name": "anthropic", "model": "benchmark-anthropic", "input_price_usd_per_million": "5", "output_price_usd_per_million": "15"}
+  ],
+  "inter_request_gap": "100ms",
+  "circuit": {"failure_threshold": 2, "open_duration": "900ms"},
+  "routing": {"min_samples": 3, "sample_max_age": "10s", "exploration_interval": 2, "max_latency_over_fastest_percent": 20},
+  "warmup": [
+    {"id": "rate-warm-01", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-warm-02", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-warm-03", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-warm-04", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-warm-05", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-warm-06", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-warm-07", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-warm-08", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}}
+  ],
+  "requests": [
+    {"id": "rate-01", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-02", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-03", "providers": {"openai": {"outcome": "rate_limited", "completion_latency": "80ms"}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-04", "providers": {"openai": {"outcome": "rate_limited", "completion_latency": "80ms"}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-05", "providers": {"openai": {"outcome": "rate_limited", "completion_latency": "80ms"}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-06", "providers": {"openai": {"outcome": "rate_limited", "completion_latency": "80ms"}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-07", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-08", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-09", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-10", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-11", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}},
+    {"id": "rate-12", "providers": {"openai": {"outcome": "success", "completion_latency": "210ms", "input_tokens": 450, "output_tokens": 80}, "anthropic": {"outcome": "success", "completion_latency": "280ms", "input_tokens": 470, "output_tokens": 85}}}
+  ]
+}

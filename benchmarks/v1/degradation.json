@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "name": "degradation",
+  "mode": "non_streaming",
+  "providers": [
+    {"name": "openai", "model": "benchmark-openai", "input_price_usd_per_million": "2", "output_price_usd_per_million": "8"},
+    {"name": "anthropic", "model": "benchmark-anthropic", "input_price_usd_per_million": "5", "output_price_usd_per_million": "15"}
+  ],
+  "inter_request_gap": "100ms",
+  "circuit": {"failure_threshold": 2, "open_duration": "900ms"},
+  "routing": {"min_samples": 3, "sample_max_age": "10s", "exploration_interval": 2, "max_latency_over_fastest_percent": 20},
+  "warmup": [
+    {"id": "degradation-warm-01", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-warm-02", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-warm-03", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-warm-04", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-warm-05", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-warm-06", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-warm-07", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-warm-08", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}}
+  ],
+  "requests": [
+    {"id": "degradation-01", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-02", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-03", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-04", "providers": {"openai": {"outcome": "timeout", "completion_latency": "450ms", "input_tokens": 480, "output_tokens": 20}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-05", "providers": {"openai": {"outcome": "timeout", "completion_latency": "450ms", "input_tokens": 480, "output_tokens": 20}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-06", "providers": {"openai": {"outcome": "timeout", "completion_latency": "450ms", "input_tokens": 480, "output_tokens": 20}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-07", "providers": {"openai": {"outcome": "timeout", "completion_latency": "450ms", "input_tokens": 480, "output_tokens": 20}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-08", "providers": {"openai": {"outcome": "timeout", "completion_latency": "450ms", "input_tokens": 480, "output_tokens": 20}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-09", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-10", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-11", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-12", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-13", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}},
+    {"id": "degradation-14", "providers": {"openai": {"outcome": "success", "completion_latency": "180ms", "input_tokens": 480, "output_tokens": 90}, "anthropic": {"outcome": "success", "completion_latency": "260ms", "input_tokens": 500, "output_tokens": 95}}}
+  ]
+}

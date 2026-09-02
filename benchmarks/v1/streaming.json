@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "name": "streaming",
+  "mode": "streaming",
+  "providers": [
+    {"name": "openai", "model": "benchmark-openai", "input_price_usd_per_million": "5", "output_price_usd_per_million": "15"},
+    {"name": "anthropic", "model": "benchmark-anthropic", "input_price_usd_per_million": "2", "output_price_usd_per_million": "8"}
+  ],
+  "inter_request_gap": "100ms",
+  "circuit": {"failure_threshold": 2, "open_duration": "900ms"},
+  "routing": {"min_samples": 3, "sample_max_age": "10s", "exploration_interval": 2, "max_latency_over_fastest_percent": 50},
+  "warmup": [
+    {"id": "stream-warm-01", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-02", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-03", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-04", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-05", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-06", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-07", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-08", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-09", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-10", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-11", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-12", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-13", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-warm-14", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}}
+  ],
+  "requests": [
+    {"id": "stream-01", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-02", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-03", "providers": {"openai": {"outcome": "timeout", "stream_duration": "300ms", "stream_failure_point": "before_commit", "input_tokens": 420, "output_tokens": 15}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-04", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-05", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-06", "providers": {"openai": {"outcome": "unavailable", "ttfc": "100ms", "stream_duration": "500ms", "stream_failure_point": "after_commit", "input_tokens": 420, "output_tokens": 60}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-07", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-08", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-09", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "rate_limited", "ttfc": "140ms", "stream_duration": "480ms", "stream_failure_point": "after_commit", "input_tokens": 430, "output_tokens": 55}}},
+    {"id": "stream-10", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-11", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}},
+    {"id": "stream-12", "providers": {"openai": {"outcome": "success", "ttfc": "100ms", "stream_duration": "700ms", "input_tokens": 420, "output_tokens": 110}, "anthropic": {"outcome": "success", "ttfc": "140ms", "stream_duration": "620ms", "input_tokens": 430, "output_tokens": 105}}}
+  ]
+}
