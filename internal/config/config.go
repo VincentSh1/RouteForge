@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -54,6 +55,8 @@ type Config struct {
 	RoutingSampleMaxAge                 time.Duration
 	RoutingExplorationInterval          int
 	RoutingMaxLatencyOverFastestPercent *uint64
+	OTelEnabled                         bool
+	OTelExporterOTLPEndpoint            string
 	Provider                            string
 	OpenAIAPIKey                        string
 	AnthropicAPIKey                     string
@@ -90,6 +93,14 @@ func Load() (Config, error) {
 		AnthropicAPIKey:            os.Getenv("ANTHROPIC_API_KEY"),
 		GeneralOpenAIModel:         strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_OPENAI")),
 		GeneralAnthropicModel:      strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_ANTHROPIC")),
+		OTelExporterOTLPEndpoint:   strings.TrimSpace(os.Getenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT")),
+	}
+	if raw := strings.TrimSpace(os.Getenv("ROUTEFORGE_OTEL_ENABLED")); raw != "" {
+		enabled, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, validationError("ROUTEFORGE_OTEL_ENABLED must be true or false")
+		}
+		cfg.OTelEnabled = enabled
 	}
 	var err error
 	if cfg.OpenAIPricing, err = loadPricing("OPENAI"); err != nil {
@@ -162,6 +173,11 @@ func Load() (Config, error) {
 	if cfg.Addr == "" {
 		return Config{}, validationError("ROUTEFORGE_ADDR must not be empty")
 	}
+	if cfg.OTelEnabled {
+		if err := validateOTLPEndpoint(cfg.OTelExporterOTLPEndpoint); err != nil {
+			return Config{}, err
+		}
+	}
 	switch cfg.RoutingPolicy {
 	case RoutingPolicyDeterministic, RoutingPolicyLatency, RoutingPolicyCost:
 	case RoutingPolicyCostLatency:
@@ -195,6 +211,18 @@ func Load() (Config, error) {
 		return Config{}, validationError("ROUTEFORGE_PROVIDER must be mock, openai, anthropic, or auto")
 	}
 	return cfg, nil
+}
+
+func validateOTLPEndpoint(endpoint string) error {
+	if endpoint == "" {
+		return validationError("ROUTEFORGE_OTEL_ENABLED=true requires ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return validationError("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT must be an HTTP(S) URL without credentials, query, or fragment")
+	}
+	return nil
 }
 
 func validationError(format string, args ...any) error {

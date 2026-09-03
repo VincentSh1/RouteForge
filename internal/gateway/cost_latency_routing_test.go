@@ -273,7 +273,7 @@ func TestCostLatencyResolvesModelsAndHonorsCircuitEligibility(t *testing.T) {
 	}
 
 	clock.Advance(time.Minute)
-	ordered := service.orderedProviders(nonStreamingMode, req.Model)
+	ordered := service.orderedProviders(context.Background(), nonStreamingMode, req.Model)
 	if ordered[0].Name() != "first" {
 		t.Fatalf("half-open candidate order = %q", ordered[0].Name())
 	}

@@ -72,6 +72,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "request body must contain a single JSON object", "invalid_request_error", nil, "invalid_json")
 		return
 	}
+	recordChatRequest(r.Context(), req)
 	if req.Stream {
 		h.streamChatCompletions(w, r, req)
 		return
@@ -124,6 +125,8 @@ func (h *Handler) streamChatCompletions(w http.ResponseWriter, r *http.Request, 
 	if err := h.completer.Stream(r.Context(), req, emit); err != nil {
 		if !committed {
 			writeCompletionError(w, err)
+		} else {
+			recordCommittedStreamFailure(w, r.Context())
 		}
 		return
 	}

@@ -13,6 +13,8 @@ import (
 	"github.com/VincentSh1/RouteForge/internal/model"
 	"github.com/VincentSh1/RouteForge/internal/openai"
 	"github.com/VincentSh1/RouteForge/internal/provider"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -51,11 +53,13 @@ type Service struct {
 	health       *healthTracker
 	telemetry    *telemetryTracker
 	routing      routingPolicy
+	routingName  string
 	rankEligible bool
 	now          func() time.Time
 	accounting   *accounting.Tracker
 	pricingMu    sync.RWMutex
 	pricing      accounting.PriceBook
+	tracer       trace.Tracer
 }
 
 func New(p provider.Provider, resolver *model.Resolver) *Service {
@@ -71,13 +75,15 @@ func NewWithCircuitBreaker(p provider.Provider, resolver *model.Resolver, config
 	}
 	providers := []provider.Provider{p}
 	return &Service{
-		providers:  providers,
-		resolver:   resolver,
-		health:     trackerFor(providers, config),
-		telemetry:  telemetryFor(providers),
-		routing:    deterministicRoutingPolicy{},
-		now:        time.Now,
-		accounting: accounting.NewTracker(nil, accounting.DefaultModelCapacity),
+		providers:   providers,
+		resolver:    resolver,
+		health:      trackerFor(providers, config),
+		telemetry:   telemetryFor(providers),
+		routing:     deterministicRoutingPolicy{},
+		routingName: RoutingPolicyDeterministic,
+		now:         time.Now,
+		accounting:  accounting.NewTracker(nil, accounting.DefaultModelCapacity),
+		tracer:      noopTracer(),
 	}
 }
 
@@ -93,14 +99,16 @@ func NewAutoWithCircuitBreaker(resolver *model.Resolver, config CircuitConfig, p
 		resolver = model.New(nil)
 	}
 	return &Service{
-		providers:  providers,
-		resolver:   resolver,
-		fallback:   true,
-		health:     trackerFor(providers, config),
-		telemetry:  telemetryFor(providers),
-		routing:    deterministicRoutingPolicy{},
-		now:        time.Now,
-		accounting: accounting.NewTracker(nil, accounting.DefaultModelCapacity),
+		providers:   providers,
+		resolver:    resolver,
+		fallback:    true,
+		health:      trackerFor(providers, config),
+		telemetry:   telemetryFor(providers),
+		routing:     deterministicRoutingPolicy{},
+		routingName: RoutingPolicyDeterministic,
+		now:         time.Now,
+		accounting:  accounting.NewTracker(nil, accounting.DefaultModelCapacity),
+		tracer:      noopTracer(),
 	}
 }
 
@@ -130,9 +138,11 @@ func newAutoService(resolver *model.Resolver, circuitConfig CircuitConfig, routi
 		health:       newHealthTracker(providerNames(providers), circuitConfig, now),
 		telemetry:    newTelemetryTracker(providerNames(providers), defaultTelemetrySampleCapacity, now),
 		routing:      routing,
+		routingName:  normalizedRoutingPolicyName(routingConfig.Policy),
 		rankEligible: rankEligible,
 		now:          now,
 		accounting:   accounting.NewTracker(nil, accounting.DefaultModelCapacity),
+		tracer:       noopTracer(),
 	}, nil
 }
 
@@ -158,7 +168,8 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 	var lastErr error
 	attempted := false
 	usableMapping := false
-	for _, item := range s.orderedProviders(nonStreamingMode, req.Model) {
+	attemptNumber := 0
+	for _, item := range s.orderedProviders(ctx, nonStreamingMode, req.Model) {
 		providerRequest := req
 		if logicalModel {
 			resolved, err := s.resolver.Resolve(req.Model, item.Name())
@@ -174,6 +185,7 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 
 		healthAttempt, allowed := s.health.begin(item.Name())
 		if !allowed {
+			recordCircuitSkip(ctx, item.Name())
 			lastErr = circuitOpenError(item.Name())
 			if !s.fallback {
 				return openai.ChatCompletionResponse{}, lastErr
@@ -182,12 +194,15 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 		}
 
 		attempted = true
+		attemptNumber++
+		attemptCtx, attemptSpan := s.startProviderAttempt(ctx, item.Name(), providerRequest.Model, logicalModel, attemptNumber, false, healthAttempt.halfOpen)
 		telemetryAttempt := s.telemetry.begin(item.Name())
-		response, err := item.Complete(ctx, providerRequest)
+		response, err := item.Complete(attemptCtx, providerRequest)
 		s.accounting.Record(item.Name(), providerRequest.Model, response.Usage)
 		outcome := classifyProviderOutcome(ctx, err)
 		recordHealthOutcome(healthAttempt, outcome)
 		telemetryAttempt.finishNonStreaming(outcome)
+		finishProviderAttempt(attemptSpan, outcome)
 		if err == nil {
 			if logicalModel {
 				response.Model = req.Model
@@ -228,7 +243,8 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 	var lastErr error
 	attempted := false
 	usableMapping := false
-	for _, item := range s.orderedProviders(streamingMode, req.Model) {
+	attemptNumber := 0
+	for _, item := range s.orderedProviders(ctx, streamingMode, req.Model) {
 		providerRequest := req
 		if logicalModel {
 			resolved, err := s.resolver.Resolve(req.Model, item.Name())
@@ -248,6 +264,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 		}
 		healthAttempt, allowed := s.health.begin(item.Name())
 		if !allowed {
+			recordCircuitSkip(ctx, item.Name())
 			lastErr = circuitOpenError(item.Name())
 			if !s.fallback {
 				return lastErr
@@ -255,13 +272,16 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 			continue
 		}
 		attempted = true
+		attemptNumber++
+		attemptCtx, attemptSpan := s.startProviderAttempt(ctx, item.Name(), providerRequest.Model, logicalModel, attemptNumber, true, healthAttempt.halfOpen)
 		telemetryAttempt := s.telemetry.begin(item.Name())
-		stream, err := streamingProvider.Stream(ctx, providerRequest)
+		stream, err := streamingProvider.Stream(attemptCtx, providerRequest)
 		if err != nil {
 			s.accounting.Record(item.Name(), providerRequest.Model, nil)
 			outcome := classifyProviderOutcome(ctx, err)
 			recordHealthOutcome(healthAttempt, outcome)
 			telemetryAttempt.finishStreaming(outcome)
+			finishProviderAttempt(attemptSpan, outcome)
 			lastErr = err
 			if !s.fallback || ctx.Err() != nil || !eligibleForFallback(err) {
 				return err
@@ -270,6 +290,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 		}
 
 		committed := false
+		firstContentTraced := false
 		var attemptUsage *openai.Usage
 		for {
 			chunk, err := stream.Next()
@@ -279,11 +300,13 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 				if errors.Is(err, io.EOF) {
 					healthAttempt.success()
 					telemetryAttempt.finishStreaming(outcomeSuccess)
+					finishProviderAttempt(attemptSpan, outcomeSuccess)
 					return nil
 				}
 				outcome := classifyProviderOutcome(ctx, err)
 				recordHealthOutcome(healthAttempt, outcome)
 				telemetryAttempt.finishStreaming(outcome)
+				finishProviderAttempt(attemptSpan, outcome)
 				lastErr = err
 				if !committed && s.fallback && ctx.Err() == nil && eligibleForFallback(err) {
 					break
@@ -300,12 +323,17 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 			chunk.Usage = nil
 			if chunk.Content != "" {
 				telemetryAttempt.firstContent()
+				if !firstContentTraced {
+					attemptSpan.AddEvent("routeforge.first_content")
+					firstContentTraced = true
+				}
 			}
 			if err := emit(chunk); err != nil {
 				_ = stream.Close()
 				s.accounting.Record(item.Name(), providerRequest.Model, attemptUsage)
 				healthAttempt.ignore()
 				telemetryAttempt.finishStreaming(outcomeCanceled)
+				finishProviderAttempt(attemptSpan, outcomeCanceled)
 				return err
 			}
 			committed = true
@@ -336,9 +364,18 @@ func providerNames(providers []provider.Provider) []string {
 	return names
 }
 
-func (s *Service) orderedProviders(mode requestMode, requestModel string) []provider.Provider {
+func (s *Service) orderedProviders(ctx context.Context, mode requestMode, requestModel string) []provider.Provider {
+	_, span := s.tracer.Start(ctx, "routeforge.routing", trace.WithAttributes(
+		attribute.String("routeforge.routing.policy", s.routingName),
+		attribute.Bool("routeforge.request.streaming", mode == streamingMode),
+		attribute.Int("routeforge.routing.candidates", len(s.providers)),
+	))
+	defer span.End()
+
 	if !s.fallback || !s.rankEligible {
-		return s.routing.order(s.providers, mode, nil, nil, s.now())
+		ordered := s.routing.order(s.providers, mode, nil, nil, s.now())
+		recordRoutingResult(span, ordered, len(ordered))
+		return ordered
 	}
 
 	eligible := make([]provider.Provider, 0, len(s.providers))
@@ -347,6 +384,10 @@ func (s *Service) orderedProviders(mode requestMode, requestModel string) []prov
 	for _, item := range s.providers {
 		if !s.health.eligible(item.Name()) {
 			ineligible = append(ineligible, item)
+			span.AddEvent("routeforge.provider.skipped", trace.WithAttributes(
+				attribute.String("routeforge.provider.name", item.Name()),
+				attribute.String("routeforge.skip.reason", "circuit_ineligible"),
+			))
 			continue
 		}
 		eligible = append(eligible, item)
@@ -357,7 +398,9 @@ func (s *Service) orderedProviders(mode requestMode, requestModel string) []prov
 
 	prices := s.candidatePrices(requestModel, eligible)
 	ordered := s.routing.order(eligible, mode, snapshots, prices, s.now())
-	return append(ordered, ineligible...)
+	ordered = append(ordered, ineligible...)
+	recordRoutingResult(span, ordered, len(eligible))
+	return ordered
 }
 
 func (s *Service) candidatePrices(requestModel string, candidates []provider.Provider) map[string]accounting.Rates {
@@ -415,6 +458,13 @@ func (s *Service) SetPricing(prices accounting.PriceBook) {
 	s.pricing = accounting.ClonePriceBook(prices)
 	s.pricingMu.Unlock()
 	s.accounting.SetPrices(prices)
+}
+
+func (s *Service) SetTracer(tracer trace.Tracer) {
+	if tracer == nil {
+		tracer = noopTracer()
+	}
+	s.tracer = tracer
 }
 
 func (s *Service) AccountingSnapshot() accounting.Snapshot {

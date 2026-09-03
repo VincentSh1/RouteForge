@@ -1,8 +1,9 @@
 # RouteForge
 
 RouteForge is an OpenAI-compatible AI inference gateway written in Go. It
-supports streaming and synchronous chat completions through mock, OpenAI, and Anthropic
-providers with explicit selection, fallback, and optional latency- or cost-aware routing.
+supports streaming and synchronous chat completions through mock, OpenAI, and
+Anthropic providers with explicit selection, fallback, and optional latency-,
+cost-, or latency-constrained cost routing.
 
 ## API
 
@@ -12,8 +13,8 @@ providers with explicit selection, fallback, and optional latency- or cost-aware
 - Streaming and non-streaming chat completions through provider interfaces
 - OpenAI-style success and error responses
 
-Authentication, persistence, caching, rate limiting, balanced latency-and-cost
-routing, and observability integrations are intentionally out of scope.
+Authentication, persistence, caching, rate limiting, semantic-quality routing,
+and metrics/dashboard integrations are intentionally out of scope.
 
 ## Requirements
 
@@ -43,6 +44,9 @@ environment variables:
 | `ROUTEFORGE_ROUTING_MIN_SAMPLES` | `5` |
 | `ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE` | `5m` |
 | `ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL` | `10` |
+| `ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT` | unset; required for `cost_latency` |
+| `ROUTEFORGE_OTEL_ENABLED` | `false` |
+| `ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT` | unset; required when OpenTelemetry is enabled |
 | `ROUTEFORGE_PROVIDER` | `mock` |
 | `OPENAI_API_KEY` | unset |
 | `ANTHROPIC_API_KEY` | unset |
@@ -125,8 +129,9 @@ falls back to the mock provider.
 ### Routing policies
 
 `ROUTEFORGE_ROUTING_POLICY=deterministic` is the default and preserves the
-configured provider order exactly. `latency` and `cost` are opt-in policies for
-auto mode. Explicit provider selection is never redirected by either policy.
+configured provider order exactly. `latency`, `cost`, and `cost_latency` are
+opt-in policies for auto mode. Explicit provider selection is never redirected
+by a routing policy.
 
 The latency policy uses the median of recent synchronous completion latency for
 non-streaming requests and recent time to first assistant content for streaming
@@ -177,6 +182,49 @@ before cost ordering, and the resulting candidate order remains fixed for the
 request. Cost routing requires no latency warm-up and does not use latency
 exploration.
 
+The `cost_latency` policy is latency-constrained cost routing. It first removes
+circuit-ineligible providers and requires every remaining candidate to have
+enough fresh, mode-specific samples. Until then, it reuses the deterministic
+warm-up behavior described above and does not rank by price. Once the candidate
+set is sufficiently measured, RouteForge finds the fastest median and divides
+providers using the operator-supplied tolerance:
+
+```sh
+export ROUTEFORGE_ROUTING_POLICY="cost_latency"
+export ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT="20"
+```
+
+The example permits providers whose median is at most 20% slower than the
+fastest measured provider. The percentage is operator policy, not a universal
+research-derived constant; RouteForge supplies no default. Zero is valid and
+admits only providers tied with the fastest median. Synchronous requests use
+completion latency, while streaming requests use TTFC and never total stream
+duration.
+
+Only providers inside the acceptable-latency partition are reordered using the
+same input/output price-dominance rule as `cost`. Missing, identical, or
+conflicting rates preserve configured order. Providers outside the partition
+remain behind all acceptable providers, regardless of price, but remain
+available for normal transient fallback. Pricing uses each candidate's resolved
+provider-native model. The policy does not estimate prompt tokens, combine
+milliseconds and money in a weighted score, or use a semantic quality signal.
+The existing latency policy's 10% switching margin is separate: it suppresses
+minor latency noise, whereas this setting expresses tolerated slowdown for an
+economic preference.
+
+### Research background
+
+[FrugalGPT](https://arxiv.org/abs/2305.05176) motivates cost-aware selection
+across models with heterogeneous economics, and
+[RouterBench](https://arxiv.org/abs/2403.12031) motivates treating routing as an
+explicit tradeoff rather than hiding it in an arbitrary scalar score.
+[RouteLLM](https://arxiv.org/abs/2406.18665) and
+[Hybrid LLM](https://arxiv.org/abs/2404.14618) study quality- or
+difficulty-aware routing capabilities that RouteForge does not currently have.
+`cost_latency` is a narrow systems policy over measured latency/TTFC and
+operator-configured rates; it does not reproduce those research systems, make
+semantic-quality claims, or imply endorsement by their authors.
+
 ## Passive provider health
 
 RouteForge tracks short-term provider reliability in memory. Timeouts,
@@ -222,7 +270,53 @@ request history. Latency samples include observation times so stale values can
 be excluded from opt-in latency routing. It contains no prompts, message
 content, bodies, credentials, headers, or raw provider errors. Measurements
 reset when the process restarts. The default routing policy remains
-deterministic; no telemetry endpoint or observability integration is provided.
+deterministic; no telemetry endpoint is provided.
+
+## OpenTelemetry tracing
+
+OpenTelemetry tracing is optional and disabled by default. Disabled mode does
+not initialize an exporter, open an observability network connection, or alter
+routing. RouteForge's bounded process-local routing telemetry, circuit state,
+and accounting remain separate from exported traces.
+
+Enable the vendor-neutral OTLP/HTTP trace exporter with an explicit collector
+endpoint:
+
+```sh
+export ROUTEFORGE_OTEL_ENABLED="true"
+export ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT="https://collector.example/v1/traces"
+go run ./cmd/routeforge
+```
+
+If the configured URL has no path, RouteForge appends `/v1/traces`. HTTPS is
+recommended for remote collectors. Plain HTTP can be selected explicitly for
+a trusted local collector, for example
+`http://127.0.0.1:4318/v1/traces`; RouteForge never silently changes HTTPS to
+HTTP.
+
+The trace hierarchy is intentionally small:
+
+```text
+routeforge.request
+├─ routeforge.routing
+├─ routeforge.provider.attempt (OpenAI timeout)
+└─ routeforge.provider.attempt (Anthropic success, fallback=true)
+```
+
+Request spans cover `POST /v1/chat/completions`, routing spans describe the
+bounded policy decision, and provider-attempt spans represent only actual
+provider invocations. Streaming attempts remain open until normal completion,
+failure, or cancellation and emit one `routeforge.first_content` event; chunks
+do not create spans. Circuit skips are events, and half-open trial admission is
+an attempt attribute where available.
+
+RouteForge accepts incoming W3C `traceparent` context. It intentionally does
+not inject RouteForge trace headers into OpenAI or Anthropic requests in this
+phase. Traces contain operational categories and bounded identifiers only.
+Prompts, responses, request/response bodies, API keys, authorization headers,
+cookies, raw provider errors, and user identifiers are never attached. The
+configured resolved model is recorded only for a bounded logical-model mapping;
+arbitrary client-supplied provider-native model names are omitted.
 
 ## Usage and estimated cost accounting
 
@@ -266,6 +360,123 @@ identifiers, or raw provider errors, and it has no public endpoint. Estimates
 may differ from provider invoices and do not model cached-token discounts,
 prompt caching, batch rates, reasoning-token categories, credits, promotions,
 or account-specific pricing.
+
+## Offline routing benchmark
+
+Production observations are selection-biased: after RouteForge sends one
+request to one provider, that observation does not reveal how every other
+provider would have handled the same request. The offline benchmark avoids that
+problem by defining a synthetic outcome for every configured provider and
+abstract request ID, then replaying the identical scenario through a fresh copy
+of the real gateway for each routing policy.
+
+The benchmark uses simulated providers behind the production provider
+interfaces. They advance a controlled clock rather than sleeping, so routing,
+fallback, telemetry freshness, circuit cooldowns, token accounting, and cost
+accounting remain deterministic and fast. Scenarios contain operational
+metadata only—no prompts, response text, user identities, credentials, or raw
+provider errors—and never contact OpenAI or Anthropic.
+
+Canonical scenarios are versioned under `benchmarks/v1/`. The five embedded
+built-ins are `stable`, `degradation`, `rate_limit`, `streaming`, and
+`cold_start`, so built-in selection works regardless of the current working
+directory. `-state cold` begins measured requests with empty runtime state.
+`-state warm` first replays the scenario's explicit warm-up sequence through
+the selected policy; those warm-up requests affect telemetry and circuits but
+are excluded from measured metrics.
+
+Run all four policies against a warm stable scenario:
+
+```sh
+go run ./cmd/routeforge-bench \
+  -scenario stable \
+  -state warm \
+  -policies deterministic,latency,cost,cost_latency
+```
+
+An explicit custom fixture uses the same offline-only v1 schema:
+
+```sh
+go run ./cmd/routeforge-bench \
+  -scenario-file benchmarks/v1/stable.json \
+  -policy latency
+```
+
+`-scenario` and `-scenario-file` are mutually exclusive, as are `-policy` and
+`-policies`. Fixtures are limited to 1 MiB, decoded with unknown fields
+rejected, and treated strictly as data. They cannot fetch URLs, run commands,
+read other paths, or interpolate environment variables.
+
+A minimal non-streaming fixture looks like:
+
+```json
+{
+  "version": 1,
+  "name": "small-example",
+  "mode": "non_streaming",
+  "providers": [
+    {"name": "provider-a", "model": "model-a"}
+  ],
+  "inter_request_gap": "100ms",
+  "circuit": {"failure_threshold": 2, "open_duration": "1s"},
+  "routing": {
+    "min_samples": 3,
+    "sample_max_age": "30s",
+    "exploration_interval": 2,
+    "max_latency_over_fastest_percent": 20
+  },
+  "warmup": [],
+  "requests": [
+    {"id": "synthetic-1", "providers": {
+      "provider-a": {
+        "outcome": "success",
+        "completion_latency": "220ms",
+        "input_tokens": 10,
+        "output_tokens": 2
+      }
+    }}
+  ]
+}
+```
+
+Durations require Go duration units such as `220ms` or `2s`. Supported outcomes
+are `success`, `timeout`, `unavailable`, `rate_limited`, `invalid_request`,
+`internal`, and `cancellation`. Streaming successes require `ttfc` and
+`stream_duration`; failures additionally identify `before_commit` or
+`after_commit` with `stream_failure_point`. A pre-commit failure omits `ttfc`.
+Only schema version 1 is supported, and the scenario name plus version are
+included in benchmark output.
+
+The command writes canonical JSON to stdout. A result is shaped like:
+
+```json
+{
+  "policy": "latency",
+  "mode": "non_streaming",
+  "requests": 12,
+  "success_rate": 1,
+  "p50_latency_ms": 220,
+  "p95_latency_ms": 220,
+  "estimated_cost_micro_usd": 48300,
+  "initial_provider_selections": {"anthropic": 12}
+}
+```
+
+Reports include successes and failures, fallbacks, average attempts, circuit
+skips, post-commit stream failures, provider selections and attempts,
+alternate-provider exploration selections, provider switches, token totals,
+estimated configured cost, and fallback cost. Synchronous reports calculate
+end-to-end completion-latency percentiles. Streaming reports calculate client
+TTFC separately from total stream duration. Percentiles use the deterministic
+nearest-rank rule: sort observations and select rank `ceil(p*n/100)`.
+
+This enables honest cost-versus-completion-latency and cost-versus-TTFC
+comparisons. It does not measure correctness, semantic response quality, human
+preference, query difficulty, or task success. RouterBench motivates evaluating
+routing tradeoffs empirically, but this harness does not reproduce its semantic
+quality benchmark. FrugalGPT motivates heterogeneous cost-conscious serving;
+RouteLLM and Hybrid LLM require quality-related signals RouteForge does not
+currently possess.
 
 ## Model resolution
 

@@ -16,6 +16,7 @@ import (
 	"github.com/VincentSh1/RouteForge/internal/gateway"
 	"github.com/VincentSh1/RouteForge/internal/httpapi"
 	"github.com/VincentSh1/RouteForge/internal/model"
+	"github.com/VincentSh1/RouteForge/internal/observability"
 	"github.com/VincentSh1/RouteForge/internal/provider"
 	"github.com/VincentSh1/RouteForge/internal/provider/anthropic"
 	"github.com/VincentSh1/RouteForge/internal/provider/mock"
@@ -39,13 +40,26 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	tracing, err := observability.New(context.Background(), cfg.OTelEnabled, cfg.OTelExporterOTLPEndpoint)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		defer cancel()
+		if err := tracing.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("OpenTelemetry shutdown incomplete")
+		}
+	}()
 
 	service, err := buildService(cfg)
 	if err != nil {
 		return err
 	}
+	service.SetTracer(tracing.Tracer())
 	handler := httpapi.NewHandler(service)
-	server := httpapi.NewServer(cfg, handler.Routes())
+	routes := httpapi.TraceRequests(handler.Routes(), tracing.Tracer(), tracing.Propagator(), cfg.RoutingPolicy)
+	server := httpapi.NewServer(cfg, routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

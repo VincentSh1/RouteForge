@@ -53,3 +53,24 @@ func classifyProviderOutcome(ctx context.Context, err error) providerOutcome {
 func (o providerOutcome) degradesHealth() bool {
 	return o == outcomeTimeout || o == outcomeUnavailable || o == outcomeRateLimited
 }
+
+func (o providerOutcome) String() string {
+	switch o {
+	case outcomeSuccess:
+		return "success"
+	case outcomeCanceled:
+		return "cancellation"
+	case outcomeTimeout:
+		return "timeout"
+	case outcomeUnavailable:
+		return "unavailable"
+	case outcomeRateLimited:
+		return "rate_limited"
+	case outcomeInvalidRequest:
+		return "invalid_request"
+	case outcomeInternal:
+		return "internal"
+	default:
+		return "other_failure"
+	}
+}

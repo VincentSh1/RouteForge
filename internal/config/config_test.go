@@ -22,6 +22,8 @@ func TestLoadDefaults(t *testing.T) {
 		"ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE",
 		"ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL",
 		"ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT",
+		"ROUTEFORGE_OTEL_ENABLED",
+		"ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -46,6 +48,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.RoutingPolicy != RoutingPolicyDeterministic || cfg.RoutingMinSamples != 5 || cfg.RoutingSampleMaxAge != 5*time.Minute || cfg.RoutingExplorationInterval != 10 {
 		t.Fatal("unexpected routing defaults")
 	}
+	if cfg.OTelEnabled || cfg.OTelExporterOTLPEndpoint != "" {
+		t.Fatal("OpenTelemetry must be disabled by default")
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -63,6 +68,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("ROUTEFORGE_ROUTING_MIN_SAMPLES", "7")
 	t.Setenv("ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", "9m")
 	t.Setenv("ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL", "11")
+	t.Setenv("ROUTEFORGE_OTEL_ENABLED", "true")
+	t.Setenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector.example/v1/traces")
 
 	cfg, err := Load()
 	if err != nil {
@@ -77,6 +84,53 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.RoutingPolicy != RoutingPolicyLatency || cfg.RoutingMinSamples != 7 || cfg.RoutingSampleMaxAge != 9*time.Minute || cfg.RoutingExplorationInterval != 11 {
 		t.Fatal("unexpected routing configuration")
 	}
+	if !cfg.OTelEnabled || cfg.OTelExporterOTLPEndpoint != "https://collector.example/v1/traces" {
+		t.Fatal("unexpected OpenTelemetry configuration")
+	}
+}
+
+func TestLoadOpenTelemetryConfiguration(t *testing.T) {
+	t.Run("enabled requires endpoint", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_OTEL_ENABLED", "true")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "requires ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT") {
+			t.Fatalf("Load() error = %v", err)
+		}
+	})
+
+	for _, endpoint := range []string{
+		"collector:4318",
+		"ftp://collector.example/traces",
+		"https://user:secret@collector.example/traces",
+		"https://collector.example/traces?token=secret",
+		"https://collector.example/traces#fragment",
+	} {
+		t.Run("invalid endpoint", func(t *testing.T) {
+			setProviderDefaults(t)
+			t.Setenv("ROUTEFORGE_OTEL_ENABLED", "true")
+			t.Setenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
+			if _, err := Load(); err == nil || strings.Contains(err.Error(), endpoint) {
+				t.Fatalf("Load() error = %v", err)
+			}
+		})
+	}
+
+	t.Run("invalid enabled value", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_OTEL_ENABLED", "sometimes")
+		if _, err := Load(); err == nil {
+			t.Fatal("Load() error = nil")
+		}
+	})
+
+	t.Run("disabled ignores exporter endpoint", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_OTEL_ENABLED", "false")
+		t.Setenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT", "not-a-url")
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+	})
 }
 
 func TestLoadRejectsInvalidRoutingConfiguration(t *testing.T) {
@@ -306,6 +360,8 @@ func setProviderDefaults(t *testing.T) {
 	t.Setenv("ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", "")
 	t.Setenv("ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL", "")
 	t.Setenv("ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT", "")
+	t.Setenv("ROUTEFORGE_OTEL_ENABLED", "")
+	t.Setenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	for _, providerName := range []string{"OPENAI", "ANTHROPIC", "MOCK"} {
 		t.Setenv("ROUTEFORGE_PRICE_"+providerName+"_INPUT_USD_PER_MILLION", "")
 		t.Setenv("ROUTEFORGE_PRICE_"+providerName+"_OUTPUT_USD_PER_MILLION", "")
