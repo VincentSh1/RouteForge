@@ -16,3 +16,14 @@ func NewServer(cfg config.Config, handler http.Handler) *http.Server {
 		IdleTimeout:       cfg.IdleTimeout,
 	}
 }
+
+func NewMetricsServer(cfg config.Config, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              cfg.MetricsAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: cfg.ReadTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+	}
+}

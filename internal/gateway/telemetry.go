@@ -98,9 +98,9 @@ func (t *telemetryTracker) begin(providerName string) *telemetryAttempt {
 	return &telemetryAttempt{tracker: t, provider: providerTelemetry, started: now}
 }
 
-func (a *telemetryAttempt) firstContent() {
+func (a *telemetryAttempt) firstContent() (time.Duration, bool) {
 	if a == nil || a.firstContentRecorded {
-		return
+		return 0, false
 	}
 	a.firstContentRecorded = true
 	now := a.tracker.now()
@@ -108,28 +108,33 @@ func (a *telemetryAttempt) firstContent() {
 	a.provider.mu.Lock()
 	a.provider.streamingTTFC.add(duration, now)
 	a.provider.mu.Unlock()
+	return duration, true
 }
 
-func (a *telemetryAttempt) finishNonStreaming(outcome providerOutcome) {
+func (a *telemetryAttempt) finishNonStreaming(outcome providerOutcome) time.Duration {
 	if a == nil {
-		return
+		return 0
 	}
 	now := a.tracker.now()
+	duration := now.Sub(a.started)
 	a.provider.mu.Lock()
 	a.provider.recordOutcome(outcome, now)
-	a.provider.nonStreamingLatencies.add(now.Sub(a.started), now)
+	a.provider.nonStreamingLatencies.add(duration, now)
 	a.provider.mu.Unlock()
+	return duration
 }
 
-func (a *telemetryAttempt) finishStreaming(outcome providerOutcome) {
+func (a *telemetryAttempt) finishStreaming(outcome providerOutcome) time.Duration {
 	if a == nil {
-		return
+		return 0
 	}
 	now := a.tracker.now()
+	duration := now.Sub(a.started)
 	a.provider.mu.Lock()
 	a.provider.recordOutcome(outcome, now)
-	a.provider.streamingDurations.add(now.Sub(a.started))
+	a.provider.streamingDurations.add(duration)
 	a.provider.mu.Unlock()
+	return duration
 }
 
 func (p *providerTelemetry) recordOutcome(outcome providerOutcome, now time.Time) {

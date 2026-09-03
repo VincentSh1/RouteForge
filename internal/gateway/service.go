@@ -11,6 +11,7 @@ import (
 
 	"github.com/VincentSh1/RouteForge/internal/accounting"
 	"github.com/VincentSh1/RouteForge/internal/model"
+	"github.com/VincentSh1/RouteForge/internal/observability"
 	"github.com/VincentSh1/RouteForge/internal/openai"
 	"github.com/VincentSh1/RouteForge/internal/provider"
 	"go.opentelemetry.io/otel/attribute"
@@ -60,6 +61,7 @@ type Service struct {
 	pricingMu    sync.RWMutex
 	pricing      accounting.PriceBook
 	tracer       trace.Tracer
+	metrics      *observability.Metrics
 }
 
 func New(p provider.Provider, resolver *model.Resolver) *Service {
@@ -84,6 +86,7 @@ func NewWithCircuitBreaker(p provider.Provider, resolver *model.Resolver, config
 		now:         time.Now,
 		accounting:  accounting.NewTracker(nil, accounting.DefaultModelCapacity),
 		tracer:      noopTracer(),
+		metrics:     observability.NoopMetrics(),
 	}
 }
 
@@ -109,6 +112,7 @@ func NewAutoWithCircuitBreaker(resolver *model.Resolver, config CircuitConfig, p
 		now:         time.Now,
 		accounting:  accounting.NewTracker(nil, accounting.DefaultModelCapacity),
 		tracer:      noopTracer(),
+		metrics:     observability.NoopMetrics(),
 	}
 }
 
@@ -143,6 +147,7 @@ func newAutoService(resolver *model.Resolver, circuitConfig CircuitConfig, routi
 		now:          now,
 		accounting:   accounting.NewTracker(nil, accounting.DefaultModelCapacity),
 		tracer:       noopTracer(),
+		metrics:      observability.NoopMetrics(),
 	}, nil
 }
 
@@ -169,6 +174,8 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 	attempted := false
 	usableMapping := false
 	attemptNumber := 0
+	fallbackFrom := ""
+	fallbackReason := outcomeOtherFailure
 	for _, item := range s.orderedProviders(ctx, nonStreamingMode, req.Model) {
 		providerRequest := req
 		if logicalModel {
@@ -195,13 +202,15 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 
 		attempted = true
 		attemptNumber++
+		s.recordAttemptStart(ctx, item.Name(), false, attemptNumber, fallbackFrom, fallbackReason)
 		attemptCtx, attemptSpan := s.startProviderAttempt(ctx, item.Name(), providerRequest.Model, logicalModel, attemptNumber, false, healthAttempt.halfOpen)
 		telemetryAttempt := s.telemetry.begin(item.Name())
 		response, err := item.Complete(attemptCtx, providerRequest)
-		s.accounting.Record(item.Name(), providerRequest.Model, response.Usage)
+		accountingResult := s.accounting.Record(item.Name(), providerRequest.Model, response.Usage)
 		outcome := classifyProviderOutcome(ctx, err)
 		recordHealthOutcome(healthAttempt, outcome)
-		telemetryAttempt.finishNonStreaming(outcome)
+		duration := telemetryAttempt.finishNonStreaming(outcome)
+		s.recordAttemptFinish(attemptCtx, item.Name(), false, attemptNumber, outcome, duration, response.Usage, accountingResult)
 		finishProviderAttempt(attemptSpan, outcome)
 		if err == nil {
 			if logicalModel {
@@ -213,6 +222,8 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 		if !s.fallback || ctx.Err() != nil || !eligibleForFallback(err) {
 			return openai.ChatCompletionResponse{}, err
 		}
+		fallbackFrom = item.Name()
+		fallbackReason = outcome
 	}
 	if !usableMapping {
 		return openai.ChatCompletionResponse{}, ErrNoUsableModelMapping
@@ -244,6 +255,8 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 	attempted := false
 	usableMapping := false
 	attemptNumber := 0
+	fallbackFrom := ""
+	fallbackReason := outcomeOtherFailure
 	for _, item := range s.orderedProviders(ctx, streamingMode, req.Model) {
 		providerRequest := req
 		if logicalModel {
@@ -273,19 +286,23 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 		}
 		attempted = true
 		attemptNumber++
+		s.recordAttemptStart(ctx, item.Name(), true, attemptNumber, fallbackFrom, fallbackReason)
 		attemptCtx, attemptSpan := s.startProviderAttempt(ctx, item.Name(), providerRequest.Model, logicalModel, attemptNumber, true, healthAttempt.halfOpen)
 		telemetryAttempt := s.telemetry.begin(item.Name())
 		stream, err := streamingProvider.Stream(attemptCtx, providerRequest)
 		if err != nil {
-			s.accounting.Record(item.Name(), providerRequest.Model, nil)
+			accountingResult := s.accounting.Record(item.Name(), providerRequest.Model, nil)
 			outcome := classifyProviderOutcome(ctx, err)
 			recordHealthOutcome(healthAttempt, outcome)
-			telemetryAttempt.finishStreaming(outcome)
+			duration := telemetryAttempt.finishStreaming(outcome)
+			s.recordAttemptFinish(attemptCtx, item.Name(), true, attemptNumber, outcome, duration, nil, accountingResult)
 			finishProviderAttempt(attemptSpan, outcome)
 			lastErr = err
 			if !s.fallback || ctx.Err() != nil || !eligibleForFallback(err) {
 				return err
 			}
+			fallbackFrom = item.Name()
+			fallbackReason = outcome
 			continue
 		}
 
@@ -296,19 +313,23 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 			chunk, err := stream.Next()
 			if err != nil {
 				_ = stream.Close()
-				s.accounting.Record(item.Name(), providerRequest.Model, attemptUsage)
+				accountingResult := s.accounting.Record(item.Name(), providerRequest.Model, attemptUsage)
 				if errors.Is(err, io.EOF) {
 					healthAttempt.success()
-					telemetryAttempt.finishStreaming(outcomeSuccess)
+					duration := telemetryAttempt.finishStreaming(outcomeSuccess)
+					s.recordAttemptFinish(attemptCtx, item.Name(), true, attemptNumber, outcomeSuccess, duration, attemptUsage, accountingResult)
 					finishProviderAttempt(attemptSpan, outcomeSuccess)
 					return nil
 				}
 				outcome := classifyProviderOutcome(ctx, err)
 				recordHealthOutcome(healthAttempt, outcome)
-				telemetryAttempt.finishStreaming(outcome)
+				duration := telemetryAttempt.finishStreaming(outcome)
+				s.recordAttemptFinish(attemptCtx, item.Name(), true, attemptNumber, outcome, duration, attemptUsage, accountingResult)
 				finishProviderAttempt(attemptSpan, outcome)
 				lastErr = err
 				if !committed && s.fallback && ctx.Err() == nil && eligibleForFallback(err) {
+					fallbackFrom = item.Name()
+					fallbackReason = outcome
 					break
 				}
 				return err
@@ -322,7 +343,9 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 			}
 			chunk.Usage = nil
 			if chunk.Content != "" {
-				telemetryAttempt.firstContent()
+				if duration, first := telemetryAttempt.firstContent(); first {
+					s.metrics.RecordTTFC(attemptCtx, item.Name(), duration)
+				}
 				if !firstContentTraced {
 					attemptSpan.AddEvent("routeforge.first_content")
 					firstContentTraced = true
@@ -330,9 +353,10 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 			}
 			if err := emit(chunk); err != nil {
 				_ = stream.Close()
-				s.accounting.Record(item.Name(), providerRequest.Model, attemptUsage)
+				accountingResult := s.accounting.Record(item.Name(), providerRequest.Model, attemptUsage)
 				healthAttempt.ignore()
-				telemetryAttempt.finishStreaming(outcomeCanceled)
+				duration := telemetryAttempt.finishStreaming(outcomeCanceled)
+				s.recordAttemptFinish(attemptCtx, item.Name(), true, attemptNumber, outcomeCanceled, duration, attemptUsage, accountingResult)
 				finishProviderAttempt(attemptSpan, outcomeCanceled)
 				return err
 			}
@@ -465,6 +489,16 @@ func (s *Service) SetTracer(tracer trace.Tracer) {
 		tracer = noopTracer()
 	}
 	s.tracer = tracer
+}
+
+func (s *Service) SetMetrics(metrics *observability.Metrics) {
+	if metrics == nil {
+		metrics = observability.NoopMetrics()
+	}
+	s.metrics = metrics
+	s.health.setTransitionObserver(func(providerName string, from, to circuitState) {
+		metrics.RecordCircuitTransition(providerName, string(from), string(to))
+	})
 }
 
 func (s *Service) AccountingSnapshot() accounting.Snapshot {

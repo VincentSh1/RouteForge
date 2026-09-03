@@ -24,10 +24,12 @@ func TestLoadDefaults(t *testing.T) {
 		"ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT",
 		"ROUTEFORGE_OTEL_ENABLED",
 		"ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT",
+		"ROUTEFORGE_METRICS_ENABLED",
 	} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("ROUTEFORGE_ADDR", "127.0.0.1:8080")
+	t.Setenv("ROUTEFORGE_METRICS_ADDR", defaultMetricsAddr)
 
 	cfg, err := Load()
 	if err != nil {
@@ -51,6 +53,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.OTelEnabled || cfg.OTelExporterOTLPEndpoint != "" {
 		t.Fatal("OpenTelemetry must be disabled by default")
 	}
+	if cfg.MetricsEnabled || cfg.MetricsAddr != "127.0.0.1:9090" {
+		t.Fatal("metrics must be disabled with a loopback default address")
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -70,6 +75,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL", "11")
 	t.Setenv("ROUTEFORGE_OTEL_ENABLED", "true")
 	t.Setenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector.example/v1/traces")
+	t.Setenv("ROUTEFORGE_METRICS_ENABLED", "true")
+	t.Setenv("ROUTEFORGE_METRICS_ADDR", "127.0.0.1:9191")
 
 	cfg, err := Load()
 	if err != nil {
@@ -87,6 +94,51 @@ func TestLoadOverrides(t *testing.T) {
 	if !cfg.OTelEnabled || cfg.OTelExporterOTLPEndpoint != "https://collector.example/v1/traces" {
 		t.Fatal("unexpected OpenTelemetry configuration")
 	}
+	if !cfg.MetricsEnabled || cfg.MetricsAddr != "127.0.0.1:9191" {
+		t.Fatal("unexpected metrics configuration")
+	}
+}
+
+func TestLoadMetricsConfiguration(t *testing.T) {
+	t.Run("enabled independently of tracing", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_METRICS_ENABLED", "true")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if !cfg.MetricsEnabled || cfg.OTelEnabled || cfg.MetricsAddr != defaultMetricsAddr {
+			t.Fatalf("configuration = %+v", cfg)
+		}
+	})
+
+	for _, address := range []string{"", "127.0.0.1", "127.0.0.1:0", "127.0.0.1:too-high"} {
+		t.Run("invalid address "+address, func(t *testing.T) {
+			setProviderDefaults(t)
+			t.Setenv("ROUTEFORGE_METRICS_ENABLED", "true")
+			t.Setenv("ROUTEFORGE_METRICS_ADDR", address)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+		})
+	}
+
+	t.Run("invalid enabled value", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_METRICS_ENABLED", "sometimes")
+		if _, err := Load(); err == nil {
+			t.Fatal("Load() error = nil")
+		}
+	})
+
+	t.Run("disabled does not require address", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_METRICS_ENABLED", "false")
+		t.Setenv("ROUTEFORGE_METRICS_ADDR", "")
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+	})
 }
 
 func TestLoadOpenTelemetryConfiguration(t *testing.T) {
@@ -362,6 +414,8 @@ func setProviderDefaults(t *testing.T) {
 	t.Setenv("ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT", "")
 	t.Setenv("ROUTEFORGE_OTEL_ENABLED", "")
 	t.Setenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("ROUTEFORGE_METRICS_ENABLED", "")
+	t.Setenv("ROUTEFORGE_METRICS_ADDR", defaultMetricsAddr)
 	for _, providerName := range []string{"OPENAI", "ANTHROPIC", "MOCK"} {
 		t.Setenv("ROUTEFORGE_PRICE_"+providerName+"_INPUT_USD_PER_MILLION", "")
 		t.Setenv("ROUTEFORGE_PRICE_"+providerName+"_OUTPUT_USD_PER_MILLION", "")

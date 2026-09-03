@@ -25,7 +25,7 @@ func TestRequestTracingHierarchyAndPrivacy(t *testing.T) {
 		model.General: {mock.Name: "mock-model"},
 	}))
 	service.SetTracer(tracer)
-	handler := TraceRequests(NewHandler(service).Routes(), tracer, propagation.TraceContext{}, gateway.RoutingPolicyLatency)
+	handler := TraceRequests(NewHandler(service).Routes(), tracer, propagation.TraceContext{}, gateway.RoutingPolicyLatency, nil)
 
 	request := chatRequest(http.MethodPost, `{"model":"routeforge/general","messages":[{"role":"user","content":"private prompt content"}]}`)
 	request.Header.Set("Authorization", "Bearer private-credential-value")
@@ -72,7 +72,7 @@ func TestMalformedRequestProducesOnlySanitizedRequestSpan(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	tracer := provider.Tracer("routeforge-test")
-	handler := TraceRequests(testHandler(&mock.Provider{}), tracer, propagation.TraceContext{}, gateway.RoutingPolicyDeterministic)
+	handler := TraceRequests(testHandler(&mock.Provider{}), tracer, propagation.TraceContext{}, gateway.RoutingPolicyDeterministic, nil)
 
 	recorderHTTP := httptest.NewRecorder()
 	handler.ServeHTTP(recorderHTTP, chatRequest(http.MethodPost, `{"model":`))
@@ -95,7 +95,7 @@ func TestStreamingRequestTracingUsesOneAttemptSpan(t *testing.T) {
 	tracer := provider.Tracer("routeforge-test")
 	service := gateway.New(&mock.Provider{StreamChunks: []string{"one", "two", "three"}}, model.New(nil))
 	service.SetTracer(tracer)
-	handler := TraceRequests(NewHandler(service).Routes(), tracer, propagation.TraceContext{}, gateway.RoutingPolicyDeterministic)
+	handler := TraceRequests(NewHandler(service).Routes(), tracer, propagation.TraceContext{}, gateway.RoutingPolicyDeterministic, nil)
 
 	recorderHTTP := httptest.NewRecorder()
 	handler.ServeHTTP(recorderHTTP, chatRequest(http.MethodPost, `{"model":"mock-model","messages":[{"role":"user"}],"stream":true}`))
@@ -130,7 +130,7 @@ func TestCommittedStreamingFailureEndsRequestSpanHonestly(t *testing.T) {
 		StreamErrAfter: 1,
 	}, model.New(nil))
 	service.SetTracer(tracer)
-	handler := TraceRequests(NewHandler(service).Routes(), tracer, propagation.TraceContext{}, gateway.RoutingPolicyDeterministic)
+	handler := TraceRequests(NewHandler(service).Routes(), tracer, propagation.TraceContext{}, gateway.RoutingPolicyDeterministic, nil)
 
 	recorderHTTP := httptest.NewRecorder()
 	handler.ServeHTTP(recorderHTTP, chatRequest(http.MethodPost, `{"model":"mock-model","messages":[{"role":"user"}],"stream":true}`))
@@ -150,7 +150,7 @@ func TestCommittedStreamingFailureEndsRequestSpanHonestly(t *testing.T) {
 
 func TestDisabledTracingPreservesStreamingHTTPBehavior(t *testing.T) {
 	tracer := noop.NewTracerProvider().Tracer("routeforge-test")
-	handler := TraceRequests(testHandler(&mock.Provider{}), tracer, propagation.TraceContext{}, gateway.RoutingPolicyDeterministic)
+	handler := TraceRequests(testHandler(&mock.Provider{}), tracer, propagation.TraceContext{}, gateway.RoutingPolicyDeterministic, nil)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, chatRequest(http.MethodPost, `{"model":"mock-model","messages":[{"role":"user"}],"stream":true}`))
 	if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "text/event-stream" || !recorder.Flushed {

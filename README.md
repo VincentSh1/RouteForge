@@ -47,6 +47,8 @@ environment variables:
 | `ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT` | unset; required for `cost_latency` |
 | `ROUTEFORGE_OTEL_ENABLED` | `false` |
 | `ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT` | unset; required when OpenTelemetry is enabled |
+| `ROUTEFORGE_METRICS_ENABLED` | `false` |
+| `ROUTEFORGE_METRICS_ADDR` | `127.0.0.1:9090` |
 | `ROUTEFORGE_PROVIDER` | `mock` |
 | `OPENAI_API_KEY` | unset |
 | `ANTHROPIC_API_KEY` | unset |
@@ -317,6 +319,66 @@ Prompts, responses, request/response bodies, API keys, authorization headers,
 cookies, raw provider errors, and user identifiers are never attached. The
 configured resolved model is recorded only for a bounded logical-model mapping;
 arbitrary client-supplied provider-native model names are omitted.
+
+## OpenTelemetry metrics and Prometheus
+
+Operational metrics are optional and independently configurable from tracing.
+They observe the request and provider lifecycle but never replace or feed
+RouteForge's process-local routing telemetry, accounting, or circuit state.
+Provider selection behaves identically whether metrics are enabled, disabled,
+scraped, or never scraped.
+
+Enable the dedicated Prometheus listener with:
+
+```sh
+export ROUTEFORGE_METRICS_ENABLED="true"
+export ROUTEFORGE_METRICS_ADDR="127.0.0.1:9090"
+go run ./cmd/routeforge
+```
+
+Then scrape it locally:
+
+```sh
+curl http://127.0.0.1:9090/metrics
+```
+
+The metrics listener is separate from the OpenAI-compatible API listener and
+defaults to loopback. No authentication is added in this phase. Operators who
+explicitly bind it beyond loopback must protect it with deployment and network
+controls.
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `routeforge_requests_total` | counter | Chat-completion requests by policy, streaming mode, and bounded outcome |
+| `routeforge_request_duration_seconds` | histogram | Full downstream request lifetime, including stream lifetime |
+| `routeforge_routing_selections_total` | counter | Initial provider actually selected |
+| `routeforge_provider_attempts_total` | counter | Actual provider attempts by bounded outcome and fallback status |
+| `routeforge_provider_duration_seconds` | histogram | Full provider invocation or upstream stream lifetime |
+| `routeforge_provider_ttfc_seconds` | histogram | Time to first non-empty assistant content |
+| `routeforge_fallbacks_total` | counter | Actual transitions to a subsequent provider attempt |
+| `routeforge_circuit_transitions_total` | counter | Authoritative `closed`, `open`, and `half_open` transitions |
+| `routeforge_tokens_total` | counter | Authoritative provider-reported input/output tokens |
+| `routeforge_estimated_cost_micro_usd_total` | counter | Existing configured cost estimates in integer micro-USD |
+
+For example, a scrape may contain:
+
+```text
+routeforge_requests_total{outcome="success",routing_policy="deterministic",streaming="false"} 1
+routeforge_provider_attempts_total{fallback="false",outcome="success",provider="mock",streaming="false"} 1
+routeforge_tokens_total{direction="input",provider="mock"} 8
+```
+
+Metrics use only bounded labels: configured provider name, routing policy,
+streaming/fallback booleans, typed outcome, circuit state, and token direction.
+Arbitrary model names, prompts, responses, bodies, credentials, authorization
+headers, user/request/trace identifiers, URLs, raw errors, and filesystem paths
+are not labels. Missing usage or pricing produces no fabricated token or
+zero-cost observation. The exporter uses a private Prometheus registry, so the
+endpoint does not automatically publish Go runtime or process collectors.
+
+Tracing and metrics support all four combinations independently: both off,
+tracing only, metrics only, or both on. Metrics disabled starts no Prometheus
+exporter or listener; tracing disabled still requires no OTLP endpoint.
 
 ## Usage and estimated cost accounting
 

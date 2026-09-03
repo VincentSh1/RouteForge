@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -24,6 +25,7 @@ const (
 	defaultRoutingMinSamples          = 5
 	defaultRoutingSampleMaxAge        = 5 * time.Minute
 	defaultRoutingExplorationInterval = 10
+	defaultMetricsAddr                = "127.0.0.1:9090"
 	defaultProvider                   = "mock"
 	defaultRoutingPolicy              = RoutingPolicyDeterministic
 )
@@ -57,6 +59,8 @@ type Config struct {
 	RoutingMaxLatencyOverFastestPercent *uint64
 	OTelEnabled                         bool
 	OTelExporterOTLPEndpoint            string
+	MetricsEnabled                      bool
+	MetricsAddr                         string
 	Provider                            string
 	OpenAIAPIKey                        string
 	AnthropicAPIKey                     string
@@ -94,13 +98,22 @@ func Load() (Config, error) {
 		GeneralOpenAIModel:         strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_OPENAI")),
 		GeneralAnthropicModel:      strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_ANTHROPIC")),
 		OTelExporterOTLPEndpoint:   strings.TrimSpace(os.Getenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT")),
+		MetricsAddr:                strings.TrimSpace(envOrDefault("ROUTEFORGE_METRICS_ADDR", defaultMetricsAddr)),
 	}
-	if raw := strings.TrimSpace(os.Getenv("ROUTEFORGE_OTEL_ENABLED")); raw != "" {
-		enabled, err := strconv.ParseBool(raw)
-		if err != nil {
-			return Config{}, validationError("ROUTEFORGE_OTEL_ENABLED must be true or false")
+	for _, value := range []struct {
+		key    string
+		target *bool
+	}{
+		{key: "ROUTEFORGE_OTEL_ENABLED", target: &cfg.OTelEnabled},
+		{key: "ROUTEFORGE_METRICS_ENABLED", target: &cfg.MetricsEnabled},
+	} {
+		if raw := strings.TrimSpace(os.Getenv(value.key)); raw != "" {
+			enabled, err := strconv.ParseBool(raw)
+			if err != nil {
+				return Config{}, validationError("%s must be true or false", value.key)
+			}
+			*value.target = enabled
 		}
-		cfg.OTelEnabled = enabled
 	}
 	var err error
 	if cfg.OpenAIPricing, err = loadPricing("OPENAI"); err != nil {
@@ -178,6 +191,11 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 	}
+	if cfg.MetricsEnabled {
+		if err := validateMetricsAddr(cfg.MetricsAddr); err != nil {
+			return Config{}, err
+		}
+	}
 	switch cfg.RoutingPolicy {
 	case RoutingPolicyDeterministic, RoutingPolicyLatency, RoutingPolicyCost:
 	case RoutingPolicyCostLatency:
@@ -211,6 +229,21 @@ func Load() (Config, error) {
 		return Config{}, validationError("ROUTEFORGE_PROVIDER must be mock, openai, anthropic, or auto")
 	}
 	return cfg, nil
+}
+
+func validateMetricsAddr(address string) error {
+	if address == "" {
+		return validationError("ROUTEFORGE_METRICS_ENABLED=true requires ROUTEFORGE_METRICS_ADDR")
+	}
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return validationError("ROUTEFORGE_METRICS_ADDR must be a host:port address")
+	}
+	portNumber, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || portNumber == 0 {
+		return validationError("ROUTEFORGE_METRICS_ADDR must use a port between 1 and 65535")
+	}
+	return nil
 }
 
 func validateOTLPEndpoint(endpoint string) error {

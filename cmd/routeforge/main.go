@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -40,14 +41,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	tracing, err := observability.New(context.Background(), cfg.OTelEnabled, cfg.OTelExporterOTLPEndpoint)
+	observabilitySetup, err := observability.New(context.Background(), observability.Config{
+		TracingEnabled: cfg.OTelEnabled,
+		TraceEndpoint:  cfg.OTelExporterOTLPEndpoint,
+		MetricsEnabled: cfg.MetricsEnabled,
+	})
 	if err != nil {
 		return err
 	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
-		if err := tracing.Shutdown(shutdownCtx); err != nil {
+		if err := observabilitySetup.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("OpenTelemetry shutdown incomplete")
 		}
 	}()
@@ -56,32 +61,65 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	service.SetTracer(tracing.Tracer())
+	service.SetTracer(observabilitySetup.Tracer())
+	service.SetMetrics(observabilitySetup.Metrics())
 	handler := httpapi.NewHandler(service)
-	routes := httpapi.TraceRequests(handler.Routes(), tracing.Tracer(), tracing.Propagator(), cfg.RoutingPolicy)
+	routes := httpapi.TraceRequests(handler.Routes(), observabilitySetup.Tracer(), observabilitySetup.Propagator(), cfg.RoutingPolicy, observabilitySetup.Metrics())
 	server := httpapi.NewServer(cfg, routes)
+	servers := []*http.Server{server}
+	if cfg.MetricsEnabled {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("/metrics", observabilitySetup.MetricsHandler())
+		servers = append(servers, httpapi.NewMetricsServer(cfg, metricsMux))
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	serverErr := make(chan error, 1)
-	go func() {
-		slog.Info("RouteForge listening")
-		serverErr <- server.ListenAndServe()
-	}()
+	listeners := make([]net.Listener, 0, len(servers))
+	for i, item := range servers {
+		listener, err := net.Listen("tcp", item.Addr)
+		if err != nil {
+			for _, opened := range listeners {
+				_ = opened.Close()
+			}
+			if i == 0 {
+				return fmt.Errorf("API listener failed to start")
+			}
+			return fmt.Errorf("metrics listener failed to start")
+		}
+		listeners = append(listeners, listener)
+	}
+
+	serverErr := make(chan error, len(servers))
+	for i, item := range servers {
+		go func(server *http.Server, listener net.Listener) {
+			serverErr <- server.Serve(listener)
+		}(item, listeners[i])
+	}
+	slog.Info("RouteForge listening")
 
 	select {
 	case err := <-serverErr:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+		if !errors.Is(err, http.ErrServerClosed) {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+			defer cancel()
+			for _, item := range servers {
+				_ = item.Shutdown(shutdownCtx)
+			}
+			return err
 		}
-		return err
+		return nil
 	case <-ctx.Done():
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
-	return server.Shutdown(shutdownCtx)
+	var shutdownErrors []error
+	for _, item := range servers {
+		shutdownErrors = append(shutdownErrors, item.Shutdown(shutdownCtx))
+	}
+	return errors.Join(shutdownErrors...)
 }
 
 func buildService(cfg config.Config) (*gateway.Service, error) {

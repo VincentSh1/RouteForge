@@ -3,8 +3,10 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/VincentSh1/RouteForge/internal/model"
+	"github.com/VincentSh1/RouteForge/internal/observability"
 	"github.com/VincentSh1/RouteForge/internal/openai"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -14,14 +16,25 @@ import (
 
 const chatCompletionsRoute = "/v1/chat/completions"
 
-func TraceRequests(next http.Handler, tracer trace.Tracer, propagator propagation.TextMapPropagator, routingPolicy string) http.Handler {
+type requestMetricState struct {
+	streaming bool
+}
+
+type requestMetricStateKey struct{}
+
+func TraceRequests(next http.Handler, tracer trace.Tracer, propagator propagation.TextMapPropagator, routingPolicy string, metrics *observability.Metrics) http.Handler {
+	if metrics == nil {
+		metrics = observability.NoopMetrics()
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != chatCompletionsRoute {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		ctx := propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		started := time.Now()
+		metricState := &requestMetricState{}
+		ctx := context.WithValue(propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header)), requestMetricStateKey{}, metricState)
 		ctx, span := tracer.Start(ctx, "routeforge.request",
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(
@@ -53,10 +66,14 @@ func TraceRequests(next http.Handler, tracer trace.Tracer, propagator propagatio
 		if status >= http.StatusInternalServerError || outcome == "failure" {
 			span.SetStatus(codes.Error, "server_error")
 		}
+		metrics.RecordRequest(ctx, routingPolicy, metricState.streaming, outcome, time.Since(started))
 	})
 }
 
 func recordChatRequest(ctx context.Context, request openai.ChatCompletionRequest) {
+	if state, ok := ctx.Value(requestMetricStateKey{}).(*requestMetricState); ok {
+		state.streaming = request.Stream
+	}
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.Bool("routeforge.request.streaming", request.Stream))
 	if request.Model == model.General {

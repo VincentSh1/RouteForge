@@ -23,6 +23,8 @@ type healthTracker struct {
 	failureThreshold int
 	openDuration     time.Duration
 	now              func() time.Time
+	observerMu       sync.RWMutex
+	onTransition     func(string, circuitState, circuitState)
 }
 
 type providerHealth struct {
@@ -38,6 +40,7 @@ type providerHealth struct {
 type healthAttempt struct {
 	tracker  *healthTracker
 	provider *providerHealth
+	name     string
 	halfOpen bool
 }
 
@@ -59,6 +62,7 @@ func newHealthTracker(providerNames []string, config CircuitConfig, now func() t
 		failureThreshold: config.FailureThreshold,
 		openDuration:     config.OpenDuration,
 		now:              now,
+		onTransition:     func(string, circuitState, circuitState) {},
 	}
 	for _, name := range providerNames {
 		tracker.providers[name] = &providerHealth{state: circuitClosed}
@@ -73,24 +77,29 @@ func (t *healthTracker) begin(providerName string) (*healthAttempt, bool) {
 	}
 
 	health.mu.Lock()
-	defer health.mu.Unlock()
 
 	switch health.state {
 	case circuitOpen:
 		if t.now().Before(health.openUntil) {
+			health.mu.Unlock()
 			return nil, false
 		}
 		health.state = circuitHalfOpen
 		health.halfOpenInFlight = true
-		return &healthAttempt{tracker: t, provider: health, halfOpen: true}, true
+		health.mu.Unlock()
+		t.notifyTransition(providerName, circuitOpen, circuitHalfOpen)
+		return &healthAttempt{tracker: t, provider: health, name: providerName, halfOpen: true}, true
 	case circuitHalfOpen:
 		if health.halfOpenInFlight {
+			health.mu.Unlock()
 			return nil, false
 		}
 		health.halfOpenInFlight = true
-		return &healthAttempt{tracker: t, provider: health, halfOpen: true}, true
+		health.mu.Unlock()
+		return &healthAttempt{tracker: t, provider: health, name: providerName, halfOpen: true}, true
 	default:
-		return &healthAttempt{tracker: t, provider: health}, true
+		health.mu.Unlock()
+		return &healthAttempt{tracker: t, provider: health, name: providerName}, true
 	}
 }
 
@@ -118,19 +127,23 @@ func (t *healthTracker) eligible(providerName string) bool {
 func (a *healthAttempt) success() {
 	health := a.provider
 	health.mu.Lock()
-	defer health.mu.Unlock()
+	previous := health.state
 	health.state = circuitClosed
 	health.consecutiveFailures = 0
 	health.lastSuccess = a.tracker.now()
 	health.openUntil = time.Time{}
 	health.halfOpenInFlight = false
+	health.mu.Unlock()
+	if previous != circuitClosed {
+		a.tracker.notifyTransition(a.name, previous, circuitClosed)
+	}
 }
 
 func (a *healthAttempt) failure() {
 	health := a.provider
 	health.mu.Lock()
-	defer health.mu.Unlock()
 	now := a.tracker.now()
+	previous := health.state
 	health.lastFailure = now
 	health.consecutiveFailures++
 	if a.halfOpen || health.consecutiveFailures >= a.tracker.failureThreshold {
@@ -138,6 +151,27 @@ func (a *healthAttempt) failure() {
 		health.openUntil = now.Add(a.tracker.openDuration)
 		health.halfOpenInFlight = false
 	}
+	current := health.state
+	health.mu.Unlock()
+	if current != previous {
+		a.tracker.notifyTransition(a.name, previous, current)
+	}
+}
+
+func (t *healthTracker) setTransitionObserver(observer func(string, circuitState, circuitState)) {
+	if observer == nil {
+		observer = func(string, circuitState, circuitState) {}
+	}
+	t.observerMu.Lock()
+	t.onTransition = observer
+	t.observerMu.Unlock()
+}
+
+func (t *healthTracker) notifyTransition(providerName string, from, to circuitState) {
+	t.observerMu.RLock()
+	observer := t.onTransition
+	t.observerMu.RUnlock()
+	observer(providerName, from, to)
 }
 
 func (a *healthAttempt) ignore() {

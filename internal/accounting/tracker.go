@@ -31,6 +31,11 @@ type Snapshot struct {
 	DroppedAttempts uint64
 }
 
+type RecordResult struct {
+	EstimatedCostMicroUSD  uint64
+	EstimatedCostAvailable bool
+}
+
 type Tracker struct {
 	mu        sync.Mutex
 	models    map[Key]*modelAggregate
@@ -67,16 +72,18 @@ func (t *Tracker) SetPrices(prices PriceBook) {
 	t.mu.Unlock()
 }
 
-func (t *Tracker) Record(providerName, modelName string, providerUsage *openai.Usage) {
+func (t *Tracker) Record(providerName, modelName string, providerUsage *openai.Usage) RecordResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	key := Key{Provider: providerName, Model: modelName}
+	estimatedCost, costAvailable := EstimateMicroUSD(providerUsage, t.prices[key])
+	result := RecordResult{EstimatedCostMicroUSD: estimatedCost, EstimatedCostAvailable: costAvailable}
 	aggregate := t.models[key]
 	if aggregate == nil {
 		if len(t.models) >= t.maxModels {
 			t.dropped = saturatingAdd(t.dropped, 1, nil)
-			return
+			return result
 		}
 		aggregate = &modelAggregate{}
 		t.models[key] = aggregate
@@ -93,13 +100,13 @@ func (t *Tracker) Record(providerName, modelName string, providerUsage *openai.U
 		}
 	}
 
-	estimatedCost, costAvailable := EstimateMicroUSD(providerUsage, t.prices[key])
 	if !costAvailable {
 		aggregate.attemptsWithoutEstimatedCost = saturatingAdd(aggregate.attemptsWithoutEstimatedCost, 1, &aggregate.overflowed)
-		return
+		return result
 	}
 	aggregate.attemptsWithEstimatedCost = saturatingAdd(aggregate.attemptsWithEstimatedCost, 1, &aggregate.overflowed)
 	aggregate.estimatedCostMicroUSD = saturatingAdd(aggregate.estimatedCostMicroUSD, estimatedCost, &aggregate.overflowed)
+	return result
 }
 
 func recordUsage(aggregate *modelAggregate, providerUsage *openai.Usage) (available, complete bool) {

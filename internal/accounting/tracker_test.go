@@ -35,6 +35,24 @@ func TestTrackerAggregatesProviderModelsIndependently(t *testing.T) {
 	}
 }
 
+func TestTrackerReturnsTheCostEstimateItRecords(t *testing.T) {
+	inputRate, outputRate := uint64(1_000_000), uint64(2_000_000)
+	tracker := NewTracker(PriceBook{
+		{Provider: "openai", Model: "model-a"}: {
+			InputMicroUSDPerMillion: &inputRate, OutputMicroUSDPerMillion: &outputRate,
+		},
+	}, DefaultModelCapacity)
+
+	result := tracker.Record("openai", "model-a", openai.NewUsage(2, 3, 5))
+	if !result.EstimatedCostAvailable || result.EstimatedCostMicroUSD != 8 {
+		t.Fatalf("Record() result = %+v", result)
+	}
+	missing := tracker.Record("openai", "unpriced", openai.NewUsage(2, 3, 5))
+	if missing.EstimatedCostAvailable {
+		t.Fatalf("unpriced Record() result = %+v", missing)
+	}
+}
+
 func TestTrackerRecordsPartialUsageWithoutFabricatingCost(t *testing.T) {
 	input := uint64(7)
 	tracker := NewTracker(nil, 2)
