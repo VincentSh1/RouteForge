@@ -1,0 +1,90 @@
+services:
+  routeforge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ROUTEFORGE_ADDR: 0.0.0.0:8080
+      ROUTEFORGE_METRICS_ADDR: 0.0.0.0:9090
+      ROUTEFORGE_METRICS_ENABLED: "true"
+      ROUTEFORGE_OTEL_ENABLED: "false"
+      ROUTEFORGE_PRICE_MOCK_INPUT_USD_PER_MILLION: "2.000000"
+      ROUTEFORGE_PRICE_MOCK_OUTPUT_USD_PER_MILLION: "8.000000"
+      ROUTEFORGE_PROVIDER: mock
+    ports:
+      - 127.0.0.1:8080:8080
+    expose:
+      - "9090"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.listen-address=0.0.0.0:9090
+    ports:
+      - 127.0.0.1:9091:9090
+    volumes:
+      - ./deploy/observability/prometheus/prometheus.compose.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    depends_on:
+      routeforge:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    environment:
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_HIDE_VERSION: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GRAFANA_DASHBOARDS_PATH: /var/lib/grafana/dashboards
+      GRAFANA_PROMETHEUS_URL: http://prometheus:9090
+    ports:
+      - 127.0.0.1:3000:3000
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
+volumes:
+  prometheus-data:
+  grafana-data:
