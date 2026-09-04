@@ -1,0 +1,87 @@
+groups:
+  - name: routeforge-operational
+    rules:
+      - alert: RouteForgeHighRequestFailureRate
+        expr: |
+          (
+            sum(rate(routeforge_requests_total{outcome!="success"}[5m]))
+            /
+            clamp_min(sum(rate(routeforge_requests_total[5m])), 1e-9)
+          ) > 0.05
+          and sum(increase(routeforge_requests_total[5m])) >= 20
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: RouteForge request failure ratio is above 5%
+          description: More than 5% of RouteForge requests have been non-successful for 10 minutes.
+
+      - alert: RouteForgeHighFallbackRate
+        expr: |
+          (
+            sum(rate(routeforge_fallbacks_total[5m]))
+            /
+            clamp_min(sum(rate(routeforge_requests_total[5m])), 1e-9)
+          ) > 0.10
+          and sum(increase(routeforge_requests_total[5m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: RouteForge fallback ratio is above 10%
+          description: Actual fallback transitions exceed 10% of RouteForge request activity for 10 minutes.
+
+      - alert: RouteForgeProviderTimeouts
+        expr: sum by (provider) (increase(routeforge_provider_attempts_total{outcome="timeout"}[10m])) >= 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RouteForge provider is timing out repeatedly
+          description: Provider {{ $labels.provider }} produced at least five timeout outcomes in a rolling 10-minute window.
+
+      - alert: RouteForgeProviderRateLimited
+        expr: sum by (provider) (increase(routeforge_provider_attempts_total{outcome="rate_limited"}[10m])) >= 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RouteForge provider is repeatedly rate limited
+          description: Provider {{ $labels.provider }} produced at least five rate-limit outcomes in a rolling 10-minute window.
+
+      - alert: RouteForgeCircuitOpening
+        expr: sum by (provider) (increase(routeforge_circuit_transitions_total{to_state="open"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: RouteForge provider circuit opened
+          description: Provider {{ $labels.provider }} transitioned to OPEN during the last five minutes.
+
+      - alert: RouteForgeHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(routeforge_request_duration_seconds_bucket{streaming="false"}[5m]))
+          ) > 30
+          and sum(increase(routeforge_requests_total{streaming="false"}[5m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: RouteForge non-streaming p95 request duration is above 30 seconds
+          description: The example non-streaming latency target has been exceeded for 10 minutes.
+
+      - alert: RouteForgeHighStreamingTTFC
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(routeforge_provider_ttfc_seconds_bucket[5m]))
+          ) > 3
+          and sum(increase(routeforge_provider_ttfc_seconds_count[5m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: RouteForge streaming p95 TTFC is above 3 seconds
+          description: The example streaming responsiveness target has been exceeded for 10 minutes.
