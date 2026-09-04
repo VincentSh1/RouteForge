@@ -411,9 +411,16 @@ It has no remote write or external service configuration.
 Grafana provisioning lives under
 `deploy/observability/grafana/provisioning`. Point a local Grafana installation's
 provisioning directory there while its working directory is the repository
-root, or copy the provisioning tree and update the dashboard provider path for
-that installation. The provisioned Prometheus datasource has the stable UID
-`routeforge-prometheus` and connects to `http://127.0.0.1:9091`. The checked-in
+root, or copy the provisioning tree for that installation. For a native local
+setup, provide the deployment-specific values before starting Grafana:
+
+```sh
+export GRAFANA_PROMETHEUS_URL="http://127.0.0.1:9091"
+export GRAFANA_DASHBOARDS_PATH="deploy/observability/grafana/dashboards"
+```
+
+The provisioned Prometheus datasource has the stable UID
+`routeforge-prometheus`. The checked-in
 [RouteForge Overview dashboard](deploy/observability/grafana/dashboards/routeforge-overview.json)
 contains these sections:
 
@@ -452,8 +459,71 @@ The dashboard variables are restricted to bounded `provider`,
 request/user identifier, raw error, credential, or filesystem value is queried
 or displayed. The metrics endpoint remains loopback-only by default; protect it
 with deployment/network controls before intentionally binding it beyond
-loopback. Docker-based local orchestration is intentionally deferred to the
-next infrastructure phase.
+loopback.
+
+## Local observability demo
+
+The repository includes a minimal Compose stack for a reproducible local
+RouteForge, Prometheus, and Grafana demo. Docker with Compose is the only
+runtime prerequisite; the traffic script runs its HTTP client inside the
+RouteForge container.
+
+Start the stack from the repository root:
+
+```sh
+docker compose up --build -d
+```
+
+Generate 40 bounded mock requests, split evenly between synchronous and
+streaming calls:
+
+```sh
+./scripts/generate-demo-traffic.sh
+```
+
+An optional count from 1 through 200 is accepted:
+
+```sh
+./scripts/generate-demo-traffic.sh 100
+```
+
+Open the automatically provisioned **RouteForge Overview** dashboard at
+<http://127.0.0.1:3000>. Grafana uses anonymous Viewer access for this
+loopback-only development stack, so no repository credential is required.
+Optional Prometheus debugging is available at <http://127.0.0.1:9091>.
+
+Stop the services while retaining local Prometheus and Grafana data:
+
+```sh
+docker compose down
+```
+
+To deliberately remove the named data volumes as well:
+
+```sh
+docker compose down -v
+```
+
+The stack uses the mock provider, enables metrics, and leaves OTLP tracing
+disabled. RouteForge binds `0.0.0.0` only inside its container so Prometheus can
+scrape `routeforge:9090` over the private Compose network. The host API,
+Prometheus UI, and Grafana ports are restricted to `127.0.0.1`; the RouteForge
+metrics port is not published to the host.
+
+Mock prices of 2 fictional USD per million input tokens and 8 fictional USD per
+million output tokens are configured solely to populate estimated-cost panels.
+They are synthetic demo pricing, not commercial pricing or an invoice estimate.
+The stack pins Go 1.22.12, Alpine 3.21.6, Prometheus 3.13.2, and Grafana 13.2.1
+instead of using floating image tags. Prometheus and Grafana runtime data live
+in named volumes, while scrape, alert, datasource, and dashboard configuration
+is mounted read-only.
+
+Anonymous Grafana access is appropriate only because port 3000 is bound to
+loopback for this local demo. Do not expose this configuration outside the
+local machine; enable authentication and deployment-specific network controls
+for any shared environment. Successful mock traffic fills traffic, latency,
+TTFC, token, and estimated-cost panels. Fallback and circuit panels may remain
+empty because the demo does not fabricate provider failures.
 
 ## Usage and estimated cost accounting
 

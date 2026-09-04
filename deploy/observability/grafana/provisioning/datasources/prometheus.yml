@@ -7,7 +7,7 @@ datasources:
     type: prometheus
     uid: routeforge-prometheus
     access: proxy
-    url: http://127.0.0.1:9091
+    url: ${GRAFANA_PROMETHEUS_URL}
     isDefault: true
     editable: false
     jsonData:

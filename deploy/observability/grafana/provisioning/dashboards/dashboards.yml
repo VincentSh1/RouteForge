@@ -9,4 +9,4 @@ providers:
     allowUiUpdates: false
     updateIntervalSeconds: 30
     options:
-      path: deploy/observability/grafana/dashboards
+      path: ${GRAFANA_DASHBOARDS_PATH}
