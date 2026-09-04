@@ -1,0 +1,61 @@
+name: Go CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: |
+          unformatted_files="$(gofmt -l .)"
+          if [ -n "$unformatted_files" ]; then
+            echo "The following Go files are not gofmt-clean:"
+            printf '%s\n' "$unformatted_files"
+            exit 1
+          fi
+
+      - name: Check module files
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./...
+
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Check clean working tree
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Go checks changed the working tree:"
+            git status --short
+            exit 1
+          fi
