@@ -1,0 +1,49 @@
+name: Compose observability smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate Docker and Compose
+        run: |
+          docker version
+          docker compose version
+          docker compose config --quiet
+
+      - name: Build RouteForge image
+        run: docker compose build
+
+      - name: Start observability stack
+        run: |
+          docker compose up -d
+          docker compose ps
+
+      - name: Verify stack end to end
+        run: ./scripts/verify-observability-stack.sh 24
+
+      - name: Collect failure diagnostics
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --no-color --tail=200 routeforge prometheus grafana
+
+      - name: Tear down observability stack
+        if: always()
+        run: docker compose down -v --remove-orphans

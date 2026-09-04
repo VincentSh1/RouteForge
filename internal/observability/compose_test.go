@@ -94,6 +94,70 @@ func TestRouteForgeImageRunsNonRoot(t *testing.T) {
 	}
 }
 
+func TestComposeSmokeWorkflowCoversRuntimeIntegration(t *testing.T) {
+	workflow := readDeploymentFile(t, "../../.github/workflows/compose-smoke.yml")
+	for _, required := range []string{
+		"pull_request:",
+		"branches:\n      - main",
+		"workflow_dispatch:",
+		"permissions:\n  contents: read",
+		"timeout-minutes: 15",
+		"persist-credentials: false",
+		"docker compose config --quiet",
+		"docker compose build",
+		"docker compose up -d",
+		"./scripts/verify-observability-stack.sh 24",
+		"if: failure()",
+		"docker compose logs --no-color --tail=200 routeforge prometheus grafana",
+		"if: always()",
+		"docker compose down -v --remove-orphans",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Errorf("compose smoke workflow is missing %q", required)
+		}
+	}
+	for _, prohibited := range []string{
+		"OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY",
+		"packages: write",
+		"id-token: write",
+	} {
+		if strings.Contains(workflow, prohibited) {
+			t.Errorf("compose smoke workflow contains prohibited value %q", prohibited)
+		}
+	}
+}
+
+func TestComposeSmokeVerificationChecksProvisionedStack(t *testing.T) {
+	script := readDeploymentFile(t, "../../scripts/verify-observability-stack.sh")
+	for _, required := range []string{
+		"http://127.0.0.1:8080",
+		"http://127.0.0.1:9091",
+		"http://127.0.0.1:3000",
+		"/api/v1/targets",
+		"routeforge:9090",
+		"routeforge_requests_total",
+		"routeforge_provider_attempts_total",
+		"routeforge_tokens_total",
+		"routeforge_estimated_cost_micro_usd_total",
+		"/api/v1/rules?type=alert",
+		"RouteForgeCircuitOpening",
+		"/api/dashboards/uid/routeforge-overview",
+		"/api/datasources/uid/routeforge-prometheus/health",
+		"http://prometheus:9090",
+		"./scripts/generate-demo-traffic.sh",
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("observability verification script is missing %q", required)
+		}
+	}
+	for _, prohibited := range []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "Authorization:"} {
+		if strings.Contains(script, prohibited) {
+			t.Errorf("observability verification script contains prohibited value %q", prohibited)
+		}
+	}
+}
+
 func readDeploymentFile(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)

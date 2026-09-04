@@ -525,6 +525,12 @@ for any shared environment. Successful mock traffic fills traffic, latency,
 TTFC, token, and estimated-cost panels. Fallback and circuit panels may remain
 empty because the demo does not fabricate provider failures.
 
+The Compose stack is also exercised by a focused GitHub Actions smoke test.
+It builds the RouteForge image, starts all three services, generates bounded
+mock traffic, verifies Prometheus scraping, metrics, and alert rules, confirms
+Grafana dashboard and datasource provisioning, and always removes the CI
+containers and volumes afterward. The workflow uses no provider credentials.
+
 ## Usage and estimated cost accounting
 
 Every actual provider attempt can contribute provider-reported token usage to
