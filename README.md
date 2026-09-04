@@ -14,7 +14,9 @@ cost-, or latency-constrained cost routing.
 - OpenAI-style success and error responses
 
 Authentication, persistence, caching, rate limiting, semantic-quality routing,
-and metrics/dashboard integrations are intentionally out of scope.
+and an application control-plane UI are intentionally out of scope. Optional
+OpenTelemetry tracing, Prometheus metrics, and a provisionable Grafana
+operations dashboard are documented below.
 
 ## Requirements
 
@@ -379,6 +381,79 @@ endpoint does not automatically publish Go runtime or process collectors.
 Tracing and metrics support all four combinations independently: both off,
 tracing only, metrics only, or both on. Metrics disabled starts no Prometheus
 exporter or listener; tracing disabled still requires no OTLP endpoint.
+
+## Observability dashboard
+
+Phase 6C provides a curated, provisionable local monitoring path without
+changing RouteForge routing or metric instrumentation:
+
+```text
+RouteForge (127.0.0.1:9090/metrics)
+    -> Prometheus (127.0.0.1:9091)
+    -> Grafana (RouteForge Overview)
+```
+
+Start RouteForge with its loopback metrics listener as shown above. From the
+repository root, a locally installed Prometheus can load the checked-in scrape
+and alert configuration while using port 9091 for its own UI (RouteForge
+already uses 9090):
+
+```sh
+prometheus \
+  --config.file=deploy/observability/prometheus/prometheus.yml \
+  --web.listen-address=127.0.0.1:9091
+```
+
+The Prometheus configuration uses a 15-second scrape/evaluation interval and
+loads [the RouteForge alert rules](deploy/observability/prometheus/alerts.yml).
+It has no remote write or external service configuration.
+
+Grafana provisioning lives under
+`deploy/observability/grafana/provisioning`. Point a local Grafana installation's
+provisioning directory there while its working directory is the repository
+root, or copy the provisioning tree and update the dashboard provider path for
+that installation. The provisioned Prometheus datasource has the stable UID
+`routeforge-prometheus` and connects to `http://127.0.0.1:9091`. The checked-in
+[RouteForge Overview dashboard](deploy/observability/grafana/dashboards/routeforge-overview.json)
+contains these sections:
+
+- Overview: request rate, success rate, all-traffic fallback rate, range token
+  totals, and range estimated configured cost.
+- Request performance: p50 and p95 complete RouteForge request duration,
+  distinguishing streaming and non-streaming traffic.
+- Provider performance: p50/p95 provider lifetime and separate p50/p95
+  streaming TTFC.
+- Routing: initial selections, selection share, actual attempts, and traffic by
+  policy.
+- Failures and fallback: typed provider outcomes and bounded fallback paths.
+- Circuit breaker: transition rates and range counts, without pretending to
+  expose authoritative current state.
+- Tokens and estimated cost: consumption rates/range totals and configured-cost
+  estimates by provider.
+
+Dashboard totals use `increase()`, rates use `rate()`, and latency panels use
+`histogram_quantile()` over histogram buckets so RouteForge counter resets are
+handled correctly. The fallback-rate denominator is all RouteForge request
+activity because fallback metrics do not carry routing-policy or streaming
+labels. Estimated micro-USD is converted to USD for display; it is not an
+invoice amount and can underrepresent attempts where usage or pricing was
+unavailable.
+
+[Example operational SLOs](deploy/observability/SLOS.md) define adjustable
+local targets for 7-day request success, non-streaming p95 request duration,
+and streaming p95 TTFC. They deliberately define neither cost nor semantic
+quality objectives. Alerts cover sustained request failures, elevated
+fallback, repeated provider timeout/rate-limit outcomes, circuit openings, and
+high request latency/TTFC. Their severity labels express relative urgency only
+and do not establish a paging policy.
+
+The dashboard variables are restricted to bounded `provider`,
+`routing_policy`, and `streaming` labels. No prompt, response, arbitrary model,
+request/user identifier, raw error, credential, or filesystem value is queried
+or displayed. The metrics endpoint remains loopback-only by default; protect it
+with deployment/network controls before intentionally binding it beyond
+loopback. Docker-based local orchestration is intentionally deferred to the
+next infrastructure phase.
 
 ## Usage and estimated cost accounting
 

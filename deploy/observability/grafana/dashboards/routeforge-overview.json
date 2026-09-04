@@ -1,0 +1,458 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Operational traffic, latency, fallback, circuit, token, and configured-cost signals for RouteForge. Counters reset when RouteForge restarts.",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "panels": [],
+      "title": "Overview",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Current RouteForge request throughput for the selected policy and mode.",
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        { "editorMode": "code", "expr": "sum(rate(routeforge_requests_total{routing_policy=~\"$routing_policy\",streaming=~\"$streaming\"}[$__rate_interval]))", "legendFormat": "requests/s", "range": true, "refId": "A" }
+      ],
+      "title": "Request rate",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Successful request rate divided by total request rate. No traffic displays 0 rather than infinity.",
+      "fieldConfig": { "defaults": { "max": 100, "min": 0, "unit": "percent" }, "overrides": [] },
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 1 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        { "editorMode": "code", "expr": "100 * sum(rate(routeforge_requests_total{outcome=\"success\",routing_policy=~\"$routing_policy\",streaming=~\"$streaming\"}[$__rate_interval])) / clamp_min(sum(rate(routeforge_requests_total{routing_policy=~\"$routing_policy\",streaming=~\"$streaming\"}[$__rate_interval])), 1e-9)", "legendFormat": "success", "range": true, "refId": "A" }
+      ],
+      "title": "Success rate",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Actual fallback transitions divided by all RouteForge requests. The fallback metric has no policy/mode labels, so this panel intentionally uses all traffic.",
+      "fieldConfig": { "defaults": { "max": 100, "min": 0, "unit": "percent" }, "overrides": [] },
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 1 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        { "editorMode": "code", "expr": "100 * sum(rate(routeforge_fallbacks_total[$__rate_interval])) / clamp_min(sum(rate(routeforge_requests_total[$__rate_interval])), 1e-9)", "legendFormat": "fallbacks / requests", "range": true, "refId": "A" }
+      ],
+      "title": "Fallback rate (all traffic)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Configured estimated cost observed during the selected range. This is not provider invoice cost and can omit attempts without an estimate.",
+      "fieldConfig": { "defaults": { "decimals": 4, "unit": "currencyUSD" }, "overrides": [] },
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 1 },
+      "id": 5,
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        { "editorMode": "code", "expr": "sum(increase(routeforge_estimated_cost_micro_usd_total{provider=~\"$provider\"}[$__range])) / 1000000", "instant": true, "legendFormat": "estimated USD", "range": false, "refId": "A" }
+      ],
+      "title": "Estimated cost in selected range",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Authoritative provider-reported input tokens observed during the selected range.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 1 },
+      "id": 6,
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        { "editorMode": "code", "expr": "sum(increase(routeforge_tokens_total{direction=\"input\",provider=~\"$provider\"}[$__range]))", "instant": true, "legendFormat": "input tokens", "range": false, "refId": "A" }
+      ],
+      "title": "Input tokens in selected range",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Authoritative provider-reported output tokens observed during the selected range.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 1 },
+      "id": 7,
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        { "editorMode": "code", "expr": "sum(increase(routeforge_tokens_total{direction=\"output\",provider=~\"$provider\"}[$__range]))", "instant": true, "legendFormat": "output tokens", "range": false, "refId": "A" }
+      ],
+      "title": "Output tokens in selected range",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "id": 8,
+      "panels": [],
+      "title": "Request performance",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Median full RouteForge request duration. Streaming duration is the complete downstream stream lifetime, not TTFC.",
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "id": 9,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "histogram_quantile(0.50, sum by (le, streaming) (rate(routeforge_request_duration_seconds_bucket{routing_policy=~\"$routing_policy\",streaming=~\"$streaming\"}[$__rate_interval])))", "legendFormat": "streaming={{streaming}}", "range": true, "refId": "A" }
+      ],
+      "title": "p50 request duration",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "95th-percentile full RouteForge request duration by request mode.",
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "id": 10,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "histogram_quantile(0.95, sum by (le, streaming) (rate(routeforge_request_duration_seconds_bucket{routing_policy=~\"$routing_policy\",streaming=~\"$streaming\"}[$__rate_interval])))", "legendFormat": "streaming={{streaming}}", "range": true, "refId": "A" }
+      ],
+      "title": "p95 request duration",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+      "id": 11,
+      "panels": [],
+      "title": "Provider performance",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Median complete provider invocation lifetime, including upstream stream lifetime for streaming attempts.",
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 16 },
+      "id": 12,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "histogram_quantile(0.50, sum by (le, provider, streaming) (rate(routeforge_provider_duration_seconds_bucket{provider=~\"$provider\",streaming=~\"$streaming\"}[$__rate_interval])))", "legendFormat": "{{provider}} stream={{streaming}}", "range": true, "refId": "A" }
+      ],
+      "title": "p50 provider duration",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "95th-percentile complete provider invocation lifetime.",
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 16 },
+      "id": 13,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "histogram_quantile(0.95, sum by (le, provider, streaming) (rate(routeforge_provider_duration_seconds_bucket{provider=~\"$provider\",streaming=~\"$streaming\"}[$__rate_interval])))", "legendFormat": "{{provider}} stream={{streaming}}", "range": true, "refId": "A" }
+      ],
+      "title": "p95 provider duration",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Median time from streaming provider attempt start to first non-empty assistant content.",
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 16 },
+      "id": 14,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "histogram_quantile(0.50, sum by (le, provider) (rate(routeforge_provider_ttfc_seconds_bucket{provider=~\"$provider\"}[$__rate_interval])))", "legendFormat": "{{provider}}", "range": true, "refId": "A" }
+      ],
+      "title": "p50 streaming TTFC",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "95th-percentile time to first non-empty assistant content. This is not total stream duration.",
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 16 },
+      "id": 15,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "histogram_quantile(0.95, sum by (le, provider) (rate(routeforge_provider_ttfc_seconds_bucket{provider=~\"$provider\"}[$__rate_interval])))", "legendFormat": "{{provider}}", "range": true, "refId": "A" }
+      ],
+      "title": "p95 streaming TTFC",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "id": 16,
+      "panels": [],
+      "title": "Routing",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Initial provider selection rate. A request contributes once, before any fallback.",
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 25 },
+      "id": 17,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (provider) (rate(routeforge_routing_selections_total{provider=~\"$provider\",routing_policy=~\"$routing_policy\",streaming=~\"$streaming\"}[$__rate_interval]))", "legendFormat": "{{provider}}", "range": true, "refId": "A" }
+      ],
+      "title": "Initial selections / sec",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Share of initial selections by provider for the selected policy and mode.",
+      "fieldConfig": { "defaults": { "max": 100, "min": 0, "unit": "percent" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 25 },
+      "id": 18,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "100 * sum by (provider) (rate(routeforge_routing_selections_total{provider=~\"$provider\",routing_policy=~\"$routing_policy\",streaming=~\"$streaming\"}[$__rate_interval])) / scalar(clamp_min(sum(rate(routeforge_routing_selections_total{provider=~\"$provider\",routing_policy=~\"$routing_policy\",streaming=~\"$streaming\"}[$__rate_interval])), 1e-9))", "legendFormat": "{{provider}}", "range": true, "refId": "A" }
+      ],
+      "title": "Initial selection share",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Actual provider attempt rate. This can exceed initial selections because fallback creates additional attempts.",
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 25 },
+      "id": 19,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (provider) (rate(routeforge_provider_attempts_total{provider=~\"$provider\",streaming=~\"$streaming\"}[$__rate_interval]))", "legendFormat": "{{provider}}", "range": true, "refId": "A" }
+      ],
+      "title": "Actual attempts / sec",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Request throughput by configured routing policy. The dashboard remains observational and cannot change policy.",
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 25 },
+      "id": 20,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (routing_policy) (rate(routeforge_requests_total{routing_policy=~\"$routing_policy\",streaming=~\"$streaming\"}[$__rate_interval]))", "legendFormat": "{{routing_policy}}", "range": true, "refId": "A" }
+      ],
+      "title": "Requests / sec by policy",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 },
+      "id": 21,
+      "panels": [],
+      "title": "Failures & fallback",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Operational provider outcomes. Success means provider completion, not semantic answer quality.",
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 34 },
+      "id": 22,
+      "options": { "legend": { "calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (provider, outcome) (rate(routeforge_provider_attempts_total{provider=~\"$provider\",streaming=~\"$streaming\"}[$__rate_interval]))", "legendFormat": "{{provider}} · {{outcome}}", "range": true, "refId": "A" }
+      ],
+      "title": "Provider outcomes / sec",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Actual moves from a failed provider attempt to a subsequent provider attempt, grouped by bounded path and reason.",
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 34 },
+      "id": 23,
+      "options": { "legend": { "calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (from_provider, to_provider, reason) (rate(routeforge_fallbacks_total[$__rate_interval]))", "legendFormat": "{{from_provider}} → {{to_provider}} · {{reason}}", "range": true, "refId": "A" }
+      ],
+      "title": "Fallback events / sec",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Fallback transitions in the selected dashboard range. Counters may reset when RouteForge restarts; increase() handles resets.",
+      "fieldConfig": { "defaults": { "decimals": 0, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 34 },
+      "id": 24,
+      "options": { "displayMode": "gradient", "minVizHeight": 10, "minVizWidth": 0, "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true, "valueMode": "color" },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (from_provider, to_provider, reason) (increase(routeforge_fallbacks_total[$__range]))", "instant": true, "legendFormat": "{{from_provider}} → {{to_provider}} · {{reason}}", "range": false, "refId": "A" }
+      ],
+      "title": "Fallback paths in selected range",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
+      "id": 25,
+      "panels": [],
+      "title": "Circuit breaker",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Authoritative circuit transitions over time. This does not claim to show current circuit state.",
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 43 },
+      "id": 26,
+      "options": { "legend": { "calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (provider, from_state, to_state) (rate(routeforge_circuit_transitions_total{provider=~\"$provider\"}[$__rate_interval]))", "legendFormat": "{{provider}} · {{from_state}} → {{to_state}}", "range": true, "refId": "A" }
+      ],
+      "title": "Circuit transitions / sec",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Transition counts in the selected range. Absence of transitions does not prove that a circuit is currently closed.",
+      "fieldConfig": { "defaults": { "decimals": 0, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 43 },
+      "id": 27,
+      "options": { "displayMode": "gradient", "minVizHeight": 10, "minVizWidth": 0, "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true, "valueMode": "color" },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (provider, from_state, to_state) (increase(routeforge_circuit_transitions_total{provider=~\"$provider\"}[$__range]))", "instant": true, "legendFormat": "{{provider}} · {{from_state}} → {{to_state}}", "range": false, "refId": "A" }
+      ],
+      "title": "Circuit transitions in selected range",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 51 },
+      "id": 28,
+      "panels": [],
+      "title": "Tokens & estimated cost",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Rate of authoritative provider-reported input and output token consumption.",
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 52 },
+      "id": 29,
+      "options": { "legend": { "calcs": [], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (provider, direction) (rate(routeforge_tokens_total{provider=~\"$provider\"}[$__rate_interval]))", "legendFormat": "{{provider}} · {{direction}}", "range": true, "refId": "A" }
+      ],
+      "title": "Token consumption / sec",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Provider-reported token totals observed in the selected range.",
+      "fieldConfig": { "defaults": { "decimals": 0, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 52 },
+      "id": 30,
+      "options": { "displayMode": "gradient", "minVizHeight": 10, "minVizWidth": 0, "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true, "valueMode": "color" },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (provider, direction) (increase(routeforge_tokens_total{provider=~\"$provider\"}[$__range]))", "instant": true, "legendFormat": "{{provider}} · {{direction}}", "range": false, "refId": "A" }
+      ],
+      "title": "Tokens in selected range",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Configured estimated cost by provider in the selected range. Missing usage or pricing emits no estimate and can make this lower than actual billing.",
+      "fieldConfig": { "defaults": { "decimals": 4, "unit": "currencyUSD" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 52 },
+      "id": 31,
+      "options": { "displayMode": "gradient", "minVizHeight": 10, "minVizWidth": 0, "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true, "valueMode": "color" },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (provider) (increase(routeforge_estimated_cost_micro_usd_total{provider=~\"$provider\"}[$__range])) / 1000000", "instant": true, "legendFormat": "{{provider}}", "range": false, "refId": "A" }
+      ],
+      "title": "Estimated cost in selected range by provider",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+      "description": "Hourly run rate of configured cost estimates, derived from the per-second micro-USD counter rate.",
+      "fieldConfig": { "defaults": { "decimals": 4, "unit": "currencyUSD" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 52 },
+      "id": 32,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "editorMode": "code", "expr": "sum by (provider) (rate(routeforge_estimated_cost_micro_usd_total{provider=~\"$provider\"}[$__rate_interval])) * 3600 / 1000000", "legendFormat": "{{provider}}", "range": true, "refId": "A" }
+      ],
+      "title": "Estimated cost run rate (USD/hour)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "tags": ["routeforge", "prometheus", "operations"],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+        "definition": "label_values(routeforge_provider_attempts_total, provider)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Provider",
+        "multi": true,
+        "name": "provider",
+        "options": [],
+        "query": { "query": "label_values(routeforge_provider_attempts_total, provider)", "refId": "StandardVariableQuery" },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+        "definition": "label_values(routeforge_requests_total, routing_policy)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Routing policy",
+        "multi": true,
+        "name": "routing_policy",
+        "options": [],
+        "query": { "query": "label_values(routeforge_requests_total, routing_policy)", "refId": "StandardVariableQuery" },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "routeforge-prometheus" },
+        "definition": "label_values(routeforge_requests_total, streaming)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Streaming",
+        "multi": true,
+        "name": "streaming",
+        "options": [],
+        "query": { "query": "label_values(routeforge_requests_total, streaming)", "refId": "StandardVariableQuery" },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "RouteForge Overview",
+  "uid": "routeforge-overview",
+  "version": 1,
+  "weekStart": ""
+}
