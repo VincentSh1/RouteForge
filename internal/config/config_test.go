@@ -25,6 +25,8 @@ func TestLoadDefaults(t *testing.T) {
 		"ROUTEFORGE_OTEL_ENABLED",
 		"ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT",
 		"ROUTEFORGE_METRICS_ENABLED",
+		"ROUTEFORGE_POSTGRES_ENABLED",
+		"ROUTEFORGE_DATABASE_URL",
 	} {
 		t.Setenv(key, "")
 	}
@@ -56,6 +58,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.MetricsEnabled || cfg.MetricsAddr != "127.0.0.1:9090" {
 		t.Fatal("metrics must be disabled with a loopback default address")
 	}
+	if cfg.PostgresEnabled || cfg.DatabaseURL != "" {
+		t.Fatal("PostgreSQL persistence must be disabled by default")
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -77,6 +82,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector.example/v1/traces")
 	t.Setenv("ROUTEFORGE_METRICS_ENABLED", "true")
 	t.Setenv("ROUTEFORGE_METRICS_ADDR", "127.0.0.1:9191")
+	t.Setenv("ROUTEFORGE_POSTGRES_ENABLED", "true")
+	t.Setenv("ROUTEFORGE_DATABASE_URL", "postgres://routeforge:test@database/routeforge")
 
 	cfg, err := Load()
 	if err != nil {
@@ -97,6 +104,37 @@ func TestLoadOverrides(t *testing.T) {
 	if !cfg.MetricsEnabled || cfg.MetricsAddr != "127.0.0.1:9191" {
 		t.Fatal("unexpected metrics configuration")
 	}
+	if !cfg.PostgresEnabled || cfg.DatabaseURL != "postgres://routeforge:test@database/routeforge" {
+		t.Fatal("unexpected PostgreSQL persistence configuration")
+	}
+}
+
+func TestLoadPostgresConfiguration(t *testing.T) {
+	t.Run("enabled requires database URL without echoing values", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_POSTGRES_ENABLED", "true")
+		t.Setenv("ROUTEFORGE_DATABASE_URL", "")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "requires ROUTEFORGE_DATABASE_URL") {
+			t.Fatalf("Load() error = %v", err)
+		}
+	})
+
+	t.Run("invalid enabled value", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_POSTGRES_ENABLED", "sometimes")
+		if _, err := Load(); err == nil {
+			t.Fatal("Load() error = nil")
+		}
+	})
+
+	t.Run("disabled ignores database URL", func(t *testing.T) {
+		setProviderDefaults(t)
+		t.Setenv("ROUTEFORGE_POSTGRES_ENABLED", "false")
+		t.Setenv("ROUTEFORGE_DATABASE_URL", "not-a-database-url")
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+	})
 }
 
 func TestLoadMetricsConfiguration(t *testing.T) {
@@ -398,6 +436,20 @@ func TestLoadProviderSelection(t *testing.T) {
 	}
 }
 
+func TestPostgresURLValidationDoesNotExposeInput(t *testing.T) {
+	for _, input := range []string{"invalid", "https://database.invalid/db", "postgres:///db"} {
+		t.Run(input, func(t *testing.T) {
+			setProviderDefaults(t)
+			t.Setenv("ROUTEFORGE_POSTGRES_ENABLED", "true")
+			t.Setenv("ROUTEFORGE_DATABASE_URL", input)
+			_, err := Load()
+			if err == nil || err.Error() != "ROUTEFORGE_DATABASE_URL must be a PostgreSQL URL with a host" {
+				t.Fatal("expected sanitized PostgreSQL URL validation failure")
+			}
+		})
+	}
+}
+
 func setProviderDefaults(t *testing.T) {
 	t.Helper()
 	t.Setenv("ROUTEFORGE_PROVIDER", ProviderMock)
@@ -416,6 +468,8 @@ func setProviderDefaults(t *testing.T) {
 	t.Setenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("ROUTEFORGE_METRICS_ENABLED", "")
 	t.Setenv("ROUTEFORGE_METRICS_ADDR", defaultMetricsAddr)
+	t.Setenv("ROUTEFORGE_POSTGRES_ENABLED", "")
+	t.Setenv("ROUTEFORGE_DATABASE_URL", "")
 	for _, providerName := range []string{"OPENAI", "ANTHROPIC", "MOCK"} {
 		t.Setenv("ROUTEFORGE_PRICE_"+providerName+"_INPUT_USD_PER_MILLION", "")
 		t.Setenv("ROUTEFORGE_PRICE_"+providerName+"_OUTPUT_USD_PER_MILLION", "")

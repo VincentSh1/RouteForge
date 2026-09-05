@@ -13,6 +13,7 @@ import (
 	"github.com/VincentSh1/RouteForge/internal/model"
 	"github.com/VincentSh1/RouteForge/internal/observability"
 	"github.com/VincentSh1/RouteForge/internal/openai"
+	"github.com/VincentSh1/RouteForge/internal/persistence"
 	"github.com/VincentSh1/RouteForge/internal/provider"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -48,20 +49,22 @@ type Clock interface {
 }
 
 type Service struct {
-	providers    []provider.Provider
-	resolver     *model.Resolver
-	fallback     bool
-	health       *healthTracker
-	telemetry    *telemetryTracker
-	routing      routingPolicy
-	routingName  string
-	rankEligible bool
-	now          func() time.Time
-	accounting   *accounting.Tracker
-	pricingMu    sync.RWMutex
-	pricing      accounting.PriceBook
-	tracer       trace.Tracer
-	metrics      *observability.Metrics
+	providers          []provider.Provider
+	resolver           *model.Resolver
+	fallback           bool
+	health             *healthTracker
+	telemetry          *telemetryTracker
+	routing            routingPolicy
+	routingName        string
+	rankEligible       bool
+	now                func() time.Time
+	accounting         *accounting.Tracker
+	pricingMu          sync.RWMutex
+	pricing            accounting.PriceBook
+	tracer             trace.Tracer
+	metrics            *observability.Metrics
+	historyRecorder    persistence.Recorder
+	requestIDGenerator persistence.IDGenerator
 }
 
 func New(p provider.Provider, resolver *model.Resolver) *Service {
@@ -77,16 +80,18 @@ func NewWithCircuitBreaker(p provider.Provider, resolver *model.Resolver, config
 	}
 	providers := []provider.Provider{p}
 	return &Service{
-		providers:   providers,
-		resolver:    resolver,
-		health:      trackerFor(providers, config),
-		telemetry:   telemetryFor(providers),
-		routing:     deterministicRoutingPolicy{},
-		routingName: RoutingPolicyDeterministic,
-		now:         time.Now,
-		accounting:  accounting.NewTracker(nil, accounting.DefaultModelCapacity),
-		tracer:      noopTracer(),
-		metrics:     observability.NoopMetrics(),
+		providers:          providers,
+		resolver:           resolver,
+		health:             trackerFor(providers, config),
+		telemetry:          telemetryFor(providers),
+		routing:            deterministicRoutingPolicy{},
+		routingName:        RoutingPolicyDeterministic,
+		now:                time.Now,
+		accounting:         accounting.NewTracker(nil, accounting.DefaultModelCapacity),
+		tracer:             noopTracer(),
+		metrics:            observability.NoopMetrics(),
+		historyRecorder:    persistence.NoopRecorder{},
+		requestIDGenerator: persistence.NewRequestID,
 	}
 }
 
@@ -102,17 +107,19 @@ func NewAutoWithCircuitBreaker(resolver *model.Resolver, config CircuitConfig, p
 		resolver = model.New(nil)
 	}
 	return &Service{
-		providers:   providers,
-		resolver:    resolver,
-		fallback:    true,
-		health:      trackerFor(providers, config),
-		telemetry:   telemetryFor(providers),
-		routing:     deterministicRoutingPolicy{},
-		routingName: RoutingPolicyDeterministic,
-		now:         time.Now,
-		accounting:  accounting.NewTracker(nil, accounting.DefaultModelCapacity),
-		tracer:      noopTracer(),
-		metrics:     observability.NoopMetrics(),
+		providers:          providers,
+		resolver:           resolver,
+		fallback:           true,
+		health:             trackerFor(providers, config),
+		telemetry:          telemetryFor(providers),
+		routing:            deterministicRoutingPolicy{},
+		routingName:        RoutingPolicyDeterministic,
+		now:                time.Now,
+		accounting:         accounting.NewTracker(nil, accounting.DefaultModelCapacity),
+		tracer:             noopTracer(),
+		metrics:            observability.NoopMetrics(),
+		historyRecorder:    persistence.NoopRecorder{},
+		requestIDGenerator: persistence.NewRequestID,
 	}
 }
 
@@ -136,22 +143,26 @@ func newAutoService(resolver *model.Resolver, circuitConfig CircuitConfig, routi
 		return nil, err
 	}
 	return &Service{
-		providers:    providers,
-		resolver:     resolver,
-		fallback:     true,
-		health:       newHealthTracker(providerNames(providers), circuitConfig, now),
-		telemetry:    newTelemetryTracker(providerNames(providers), defaultTelemetrySampleCapacity, now),
-		routing:      routing,
-		routingName:  normalizedRoutingPolicyName(routingConfig.Policy),
-		rankEligible: rankEligible,
-		now:          now,
-		accounting:   accounting.NewTracker(nil, accounting.DefaultModelCapacity),
-		tracer:       noopTracer(),
-		metrics:      observability.NoopMetrics(),
+		providers:          providers,
+		resolver:           resolver,
+		fallback:           true,
+		health:             newHealthTracker(providerNames(providers), circuitConfig, now),
+		telemetry:          newTelemetryTracker(providerNames(providers), defaultTelemetrySampleCapacity, now),
+		routing:            routing,
+		routingName:        normalizedRoutingPolicyName(routingConfig.Policy),
+		rankEligible:       rankEligible,
+		now:                now,
+		accounting:         accounting.NewTracker(nil, accounting.DefaultModelCapacity),
+		tracer:             noopTracer(),
+		metrics:            observability.NoopMetrics(),
+		historyRecorder:    persistence.NoopRecorder{},
+		requestIDGenerator: persistence.NewRequestID,
 	}, nil
 }
 
-func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest) (result openai.ChatCompletionResponse, resultErr error) {
+	history := s.beginRequestHistory(ctx, req)
+	defer func() { history.finish(resultErr) }()
 	if err := validateCore(req); err != nil {
 		return openai.ChatCompletionResponse{}, err
 	}
@@ -202,6 +213,7 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 
 		attempted = true
 		attemptNumber++
+		historyAttempt := history.startAttempt(item.Name(), providerRequest.Model)
 		s.recordAttemptStart(ctx, item.Name(), false, attemptNumber, fallbackFrom, fallbackReason)
 		attemptCtx, attemptSpan := s.startProviderAttempt(ctx, item.Name(), providerRequest.Model, logicalModel, attemptNumber, false, healthAttempt.halfOpen)
 		telemetryAttempt := s.telemetry.begin(item.Name())
@@ -210,6 +222,7 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 		outcome := classifyProviderOutcome(ctx, err)
 		recordHealthOutcome(healthAttempt, outcome)
 		duration := telemetryAttempt.finishNonStreaming(outcome)
+		history.finishAttempt(historyAttempt, outcome, duration, nil, response.Usage, accountingResult)
 		s.recordAttemptFinish(attemptCtx, item.Name(), false, attemptNumber, outcome, duration, response.Usage, accountingResult)
 		finishProviderAttempt(attemptSpan, outcome)
 		if err == nil {
@@ -236,7 +249,9 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 
 type EmitFunc func(provider.StreamChunk) error
 
-func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, emit EmitFunc) error {
+func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, emit EmitFunc) (resultErr error) {
+	history := s.beginRequestHistory(ctx, req)
+	defer func() { history.finish(resultErr) }()
 	if err := validateCore(req); err != nil {
 		return err
 	}
@@ -286,6 +301,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 		}
 		attempted = true
 		attemptNumber++
+		historyAttempt := history.startAttempt(item.Name(), providerRequest.Model)
 		s.recordAttemptStart(ctx, item.Name(), true, attemptNumber, fallbackFrom, fallbackReason)
 		attemptCtx, attemptSpan := s.startProviderAttempt(ctx, item.Name(), providerRequest.Model, logicalModel, attemptNumber, true, healthAttempt.halfOpen)
 		telemetryAttempt := s.telemetry.begin(item.Name())
@@ -295,6 +311,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 			outcome := classifyProviderOutcome(ctx, err)
 			recordHealthOutcome(healthAttempt, outcome)
 			duration := telemetryAttempt.finishStreaming(outcome)
+			history.finishAttempt(historyAttempt, outcome, duration, nil, nil, accountingResult)
 			s.recordAttemptFinish(attemptCtx, item.Name(), true, attemptNumber, outcome, duration, nil, accountingResult)
 			finishProviderAttempt(attemptSpan, outcome)
 			lastErr = err
@@ -309,6 +326,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 		committed := false
 		firstContentTraced := false
 		var attemptUsage *openai.Usage
+		var attemptTTFC *time.Duration
 		for {
 			chunk, err := stream.Next()
 			if err != nil {
@@ -317,6 +335,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 				if errors.Is(err, io.EOF) {
 					healthAttempt.success()
 					duration := telemetryAttempt.finishStreaming(outcomeSuccess)
+					history.finishAttempt(historyAttempt, outcomeSuccess, duration, attemptTTFC, attemptUsage, accountingResult)
 					s.recordAttemptFinish(attemptCtx, item.Name(), true, attemptNumber, outcomeSuccess, duration, attemptUsage, accountingResult)
 					finishProviderAttempt(attemptSpan, outcomeSuccess)
 					return nil
@@ -324,6 +343,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 				outcome := classifyProviderOutcome(ctx, err)
 				recordHealthOutcome(healthAttempt, outcome)
 				duration := telemetryAttempt.finishStreaming(outcome)
+				history.finishAttempt(historyAttempt, outcome, duration, attemptTTFC, attemptUsage, accountingResult)
 				s.recordAttemptFinish(attemptCtx, item.Name(), true, attemptNumber, outcome, duration, attemptUsage, accountingResult)
 				finishProviderAttempt(attemptSpan, outcome)
 				lastErr = err
@@ -344,6 +364,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 			chunk.Usage = nil
 			if chunk.Content != "" {
 				if duration, first := telemetryAttempt.firstContent(); first {
+					attemptTTFC = &duration
 					s.metrics.RecordTTFC(attemptCtx, item.Name(), duration)
 				}
 				if !firstContentTraced {
@@ -356,6 +377,7 @@ func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, 
 				accountingResult := s.accounting.Record(item.Name(), providerRequest.Model, attemptUsage)
 				healthAttempt.ignore()
 				duration := telemetryAttempt.finishStreaming(outcomeCanceled)
+				history.finishAttempt(historyAttempt, outcomeCanceled, duration, attemptTTFC, attemptUsage, accountingResult)
 				s.recordAttemptFinish(attemptCtx, item.Name(), true, attemptNumber, outcomeCanceled, duration, attemptUsage, accountingResult)
 				finishProviderAttempt(attemptSpan, outcomeCanceled)
 				return err
@@ -499,6 +521,17 @@ func (s *Service) SetMetrics(metrics *observability.Metrics) {
 	s.health.setTransitionObserver(func(providerName string, from, to circuitState) {
 		metrics.RecordCircuitTransition(providerName, string(from), string(to))
 	})
+}
+
+func (s *Service) SetPersistence(recorder persistence.Recorder, generator persistence.IDGenerator) {
+	if recorder == nil {
+		recorder = persistence.NoopRecorder{}
+	}
+	if generator == nil {
+		generator = persistence.NewRequestID
+	}
+	s.historyRecorder = recorder
+	s.requestIDGenerator = generator
 }
 
 func (s *Service) AccountingSnapshot() accounting.Snapshot {

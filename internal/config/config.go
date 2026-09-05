@@ -61,6 +61,8 @@ type Config struct {
 	OTelExporterOTLPEndpoint            string
 	MetricsEnabled                      bool
 	MetricsAddr                         string
+	PostgresEnabled                     bool
+	DatabaseURL                         string
 	Provider                            string
 	OpenAIAPIKey                        string
 	AnthropicAPIKey                     string
@@ -99,6 +101,7 @@ func Load() (Config, error) {
 		GeneralAnthropicModel:      strings.TrimSpace(os.Getenv("ROUTEFORGE_MODEL_GENERAL_ANTHROPIC")),
 		OTelExporterOTLPEndpoint:   strings.TrimSpace(os.Getenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT")),
 		MetricsAddr:                strings.TrimSpace(envOrDefault("ROUTEFORGE_METRICS_ADDR", defaultMetricsAddr)),
+		DatabaseURL:                strings.TrimSpace(os.Getenv("ROUTEFORGE_DATABASE_URL")),
 	}
 	for _, value := range []struct {
 		key    string
@@ -106,6 +109,7 @@ func Load() (Config, error) {
 	}{
 		{key: "ROUTEFORGE_OTEL_ENABLED", target: &cfg.OTelEnabled},
 		{key: "ROUTEFORGE_METRICS_ENABLED", target: &cfg.MetricsEnabled},
+		{key: "ROUTEFORGE_POSTGRES_ENABLED", target: &cfg.PostgresEnabled},
 	} {
 		if raw := strings.TrimSpace(os.Getenv(value.key)); raw != "" {
 			enabled, err := strconv.ParseBool(raw)
@@ -194,6 +198,15 @@ func Load() (Config, error) {
 	if cfg.MetricsEnabled {
 		if err := validateMetricsAddr(cfg.MetricsAddr); err != nil {
 			return Config{}, err
+		}
+	}
+	if cfg.PostgresEnabled && cfg.DatabaseURL == "" {
+		return Config{}, validationError("ROUTEFORGE_POSTGRES_ENABLED=true requires ROUTEFORGE_DATABASE_URL")
+	}
+	if cfg.PostgresEnabled {
+		databaseURL, err := url.Parse(cfg.DatabaseURL)
+		if err != nil || (databaseURL.Scheme != "postgres" && databaseURL.Scheme != "postgresql") || databaseURL.Hostname() == "" {
+			return Config{}, validationError("ROUTEFORGE_DATABASE_URL must be a PostgreSQL URL with a host")
 		}
 	}
 	switch cfg.RoutingPolicy {

@@ -27,6 +27,7 @@ type Metrics struct {
 	circuitTransitions metric.Int64Counter
 	tokens             metric.Int64Counter
 	estimatedCost      metric.Int64Counter
+	persistenceRecords metric.Int64Counter
 }
 
 func NewMetrics(meter metric.Meter) (*Metrics, error) {
@@ -82,12 +83,16 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 	if err != nil {
 		return nil, err
 	}
+	persistenceRecords, err := meter.Int64Counter("routeforge_persistence_records", metric.WithDescription("Completed operational history persistence results"))
+	if err != nil {
+		return nil, err
+	}
 	return &Metrics{
 		requests: requests, requestDuration: requestDuration,
 		routingSelections: routingSelections,
 		providerAttempts:  providerAttempts, providerDuration: providerDuration, providerTTFC: providerTTFC,
 		fallbacks: fallbacks, circuitTransitions: circuitTransitions,
-		tokens: tokens, estimatedCost: estimatedCost,
+		tokens: tokens, estimatedCost: estimatedCost, persistenceRecords: persistenceRecords,
 	}, nil
 }
 
@@ -183,6 +188,13 @@ func (m *Metrics) RecordEstimatedCost(ctx context.Context, providerName string, 
 		return
 	}
 	m.addUint64(ctx, m.estimatedCost, microUSD, metric.WithAttributes(attribute.String("provider", providerName)))
+}
+
+func (m *Metrics) RecordPersistence(ctx context.Context, outcome string) {
+	if m == nil || m.persistenceRecords == nil {
+		return
+	}
+	m.persistenceRecords.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
 
 func (m *Metrics) addUint64(ctx context.Context, counter metric.Int64Counter, value uint64, options ...metric.AddOption) {

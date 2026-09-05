@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/VincentSh1/RouteForge/internal/accounting"
 	"github.com/VincentSh1/RouteForge/internal/config"
@@ -18,6 +19,8 @@ import (
 	"github.com/VincentSh1/RouteForge/internal/httpapi"
 	"github.com/VincentSh1/RouteForge/internal/model"
 	"github.com/VincentSh1/RouteForge/internal/observability"
+	"github.com/VincentSh1/RouteForge/internal/persistence"
+	postgrespersistence "github.com/VincentSh1/RouteForge/internal/persistence/postgres"
 	"github.com/VincentSh1/RouteForge/internal/provider"
 	"github.com/VincentSh1/RouteForge/internal/provider/anthropic"
 	"github.com/VincentSh1/RouteForge/internal/provider/mock"
@@ -57,12 +60,27 @@ func run() error {
 		}
 	}()
 
+	historyRecorder, historyShutdown, err := initializePersistence(cfg, observabilitySetup.Metrics())
+	if err != nil {
+		return err
+	}
+	if historyShutdown != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+			defer cancel()
+			if err := historyShutdown(shutdownCtx); err != nil {
+				slog.Warn("PostgreSQL persistence shutdown incomplete")
+			}
+		}()
+	}
+
 	service, err := buildService(cfg)
 	if err != nil {
 		return err
 	}
 	service.SetTracer(observabilitySetup.Tracer())
 	service.SetMetrics(observabilitySetup.Metrics())
+	service.SetPersistence(historyRecorder, nil)
 	handler := httpapi.NewHandler(service)
 	routes := httpapi.TraceRequests(handler.Routes(), observabilitySetup.Tracer(), observabilitySetup.Propagator(), cfg.RoutingPolicy, observabilitySetup.Metrics())
 	server := httpapi.NewServer(cfg, routes)
@@ -120,6 +138,22 @@ func run() error {
 		shutdownErrors = append(shutdownErrors, item.Shutdown(shutdownCtx))
 	}
 	return errors.Join(shutdownErrors...)
+}
+
+func initializePersistence(cfg config.Config, metrics *observability.Metrics) (persistence.Recorder, func(context.Context) error, error) {
+	if !cfg.PostgresEnabled {
+		return persistence.NoopRecorder{}, nil, nil
+	}
+	startupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := postgrespersistence.Open(startupCtx, cfg.DatabaseURL)
+	if err != nil {
+		return nil, nil, errors.New("PostgreSQL persistence initialization failed")
+	}
+	recorder := persistence.NewAsyncRecorder(store, persistence.DefaultQueueCapacity, func(outcome persistence.WriteOutcome) {
+		metrics.RecordPersistence(context.Background(), string(outcome))
+	})
+	return recorder, recorder.Shutdown, nil
 }
 
 func buildService(cfg config.Config) (*gateway.Service, error) {

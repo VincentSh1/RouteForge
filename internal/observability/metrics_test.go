@@ -23,6 +23,7 @@ func TestMetricsRecordBoundedLifecycleMeasurements(t *testing.T) {
 	metrics.RecordCircuitTransition("openai", "closed", "open")
 	metrics.RecordUsage(ctx, "anthropic", openai.NewUsage(10, 4, 14))
 	metrics.RecordEstimatedCost(ctx, "anthropic", 17)
+	metrics.RecordPersistence(ctx, "written")
 
 	collected := collectMetrics(t, reader)
 	assertIntSum(t, collected, "routeforge_requests", 1)
@@ -32,6 +33,7 @@ func TestMetricsRecordBoundedLifecycleMeasurements(t *testing.T) {
 	assertIntSum(t, collected, "routeforge_circuit_transitions", 1)
 	assertIntSum(t, collected, "routeforge_tokens", 14)
 	assertIntSum(t, collected, "routeforge_estimated_cost_micro_usd", 17)
+	assertIntSum(t, collected, "routeforge_persistence_records", 1)
 	assertHistogramCount(t, collected, "routeforge_request_duration", 1, durationBuckets)
 	assertHistogramCount(t, collected, "routeforge_provider_duration", 2, durationBuckets)
 	assertHistogramCount(t, collected, "routeforge_provider_ttfc", 1, ttfcBuckets)
