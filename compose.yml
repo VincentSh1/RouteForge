@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:17.11-bookworm
+    environment:
+      POSTGRES_DB: routeforge
+      POSTGRES_USER: routeforge_local
+      POSTGRES_PASSWORD: routeforge_local_only
+    expose:
+      - "5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U routeforge_local -d routeforge"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
   routeforge:
     build:
       context: .
@@ -8,6 +25,8 @@ services:
       ROUTEFORGE_METRICS_ADDR: 0.0.0.0:9090
       ROUTEFORGE_METRICS_ENABLED: "true"
       ROUTEFORGE_OTEL_ENABLED: "false"
+      ROUTEFORGE_POSTGRES_ENABLED: "true"
+      ROUTEFORGE_DATABASE_URL: postgres://routeforge_local:routeforge_local_only@postgres:5432/routeforge?sslmode=disable
       ROUTEFORGE_PRICE_MOCK_INPUT_USD_PER_MILLION: "2.000000"
       ROUTEFORGE_PRICE_MOCK_OUTPUT_USD_PER_MILLION: "8.000000"
       ROUTEFORGE_PROVIDER: mock
@@ -28,6 +47,9 @@ services:
       timeout: 3s
       retries: 12
       start_period: 5s
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   prometheus:
     image: prom/prometheus:v3.13.2
@@ -86,5 +108,6 @@ services:
         condition: service_healthy
 
 volumes:
+  postgres-data:
   prometheus-data:
   grafana-data:

@@ -13,14 +13,14 @@ cost-, or latency-constrained cost routing.
 - Streaming and non-streaming chat completions through provider interfaces
 - OpenAI-style success and error responses
 
-Authentication, persistence, caching, rate limiting, semantic-quality routing,
+Authentication, caching, rate limiting, semantic-quality routing,
 and an application control-plane UI are intentionally out of scope. Optional
 OpenTelemetry tracing, Prometheus metrics, and a provisionable Grafana
 operations dashboard are documented below.
 
 ## Requirements
 
-- Go 1.22 or newer
+- Go 1.26 or newer
 
 ## Run
 
@@ -361,6 +361,7 @@ controls.
 | `routeforge_circuit_transitions_total` | counter | Authoritative `closed`, `open`, and `half_open` transitions |
 | `routeforge_tokens_total` | counter | Authoritative provider-reported input/output tokens |
 | `routeforge_estimated_cost_micro_usd_total` | counter | Existing configured cost estimates in integer micro-USD |
+| `routeforge_persistence_records_total` | counter | Durable history records written, dropped because the queue was full, or rejected by a runtime write error |
 
 For example, a scrape may contain:
 
@@ -464,9 +465,9 @@ loopback.
 ## Local observability demo
 
 The repository includes a minimal Compose stack for a reproducible local
-RouteForge, Prometheus, and Grafana demo. Docker with Compose is the only
-runtime prerequisite; the traffic script runs its HTTP client inside the
-RouteForge container.
+RouteForge, PostgreSQL, Prometheus, and Grafana demo. Docker with Compose is
+the only runtime prerequisite; the traffic script runs its HTTP client inside
+the RouteForge container.
 
 Start the stack from the repository root:
 
@@ -504,16 +505,18 @@ To deliberately remove the named data volumes as well:
 docker compose down -v
 ```
 
-The stack uses the mock provider, enables metrics, and leaves OTLP tracing
-disabled. RouteForge binds `0.0.0.0` only inside its container so Prometheus can
-scrape `routeforge:9090` over the private Compose network. The host API,
-Prometheus UI, and Grafana ports are restricted to `127.0.0.1`; the RouteForge
-metrics port is not published to the host.
+The stack uses the mock provider, enables PostgreSQL persistence and metrics,
+and leaves OTLP tracing disabled. RouteForge binds `0.0.0.0` only inside its
+container so Prometheus can scrape `routeforge:9090` over the private Compose
+network. The host API, Prometheus UI, and Grafana ports are restricted to
+`127.0.0.1`; neither the RouteForge metrics port nor PostgreSQL is published to
+the host.
 
 Mock prices of 2 fictional USD per million input tokens and 8 fictional USD per
 million output tokens are configured solely to populate estimated-cost panels.
 They are synthetic demo pricing, not commercial pricing or an invoice estimate.
-The stack pins Go 1.22.12, Alpine 3.21.6, Prometheus 3.13.2, and Grafana 13.2.1
+The stack pins Go 1.26.6 (Alpine 3.23 builder), Alpine 3.21.6 runtime,
+PostgreSQL 17.11-bookworm, Prometheus 3.13.2, and Grafana 13.2.1
 instead of using floating image tags. Prometheus and Grafana runtime data live
 in named volumes, while scrape, alert, datasource, and dashboard configuration
 is mounted read-only.
@@ -526,10 +529,63 @@ TTFC, token, and estimated-cost panels. Fallback and circuit panels may remain
 empty because the demo does not fabricate provider failures.
 
 The Compose stack is also exercised by a focused GitHub Actions smoke test.
-It builds the RouteForge image, starts all three services, generates bounded
-mock traffic, verifies Prometheus scraping, metrics, and alert rules, confirms
+It builds the RouteForge image, starts all four services, generates bounded
+mock traffic, verifies durable request and attempt rows across a RouteForge
+restart, verifies Prometheus scraping, metrics, and alert rules, confirms
 Grafana dashboard and datasource provisioning, and always removes the CI
 containers and volumes afterward. The workflow uses no provider credentials.
+
+## PostgreSQL operational history
+
+Durable operational history is optional outside Compose:
+
+The PostgreSQL adapter uses pgx v5.9.0 with the Go 1.26 toolchain.
+
+```sh
+export ROUTEFORGE_POSTGRES_ENABLED="true"
+export ROUTEFORGE_DATABASE_URL="postgres://routeforge:local-only@127.0.0.1:5432/routeforge"
+```
+
+When enabled, RouteForge validates connectivity, applies embedded versioned
+migrations, and queues terminal request records for a bounded background
+writer. Startup fails if the explicitly configured database is unavailable,
+but a runtime database write failure never changes inference, routing,
+fallback, circuit, telemetry, or accounting outcomes.
+
+History contains an opaque RouteForge request ID, timestamps, routing policy,
+streaming mode, bounded model identity, the actual provider-attempt chain,
+typed outcomes, durations and TTFC, authoritative nullable token usage, and
+nullable estimated micro-USD cost. It never contains prompts, messages,
+responses, request or response bodies, credentials, user identifiers, client
+addresses, trace IDs, or raw provider errors.
+
+The Compose database uses a private network, a named `postgres-data` volume,
+and clearly synthetic local-only credentials. History survives a RouteForge
+container restart. `docker compose down -v` deliberately deletes it along with
+the other local observability volumes. Phase 7A provides no request-history
+HTTP API.
+
+One background writer consumes a queue of at most 256 completed requests.
+Submission never waits for database I/O; full queues drop the new record.
+Writes have a five-second timeout and no automatic retries. Shutdown stops
+submission and drains until its deadline, then cancels outstanding work.
+`routeforge_persistence_records_total` reports `written`, `write_error`, and
+`queue_full`; abandoned shutdown records count as write errors. A crash can
+lose in-flight requests and queued records. This is best-effort operational
+history, not an audit log with guaranteed delivery.
+
+Records cover gateway operations; malformed HTTP payloads rejected before
+entering the gateway are excluded. Streaming records finalize at stream
+termination, retaining usage and TTFC observed before any later failure.
+`final_provider` is NULL when no provider completes successfully. Model
+identities are limited to 256 characters. Durations are integer microseconds,
+timestamps are UTC, and monetary values are integer micro-USD; values exceeding
+PostgreSQL BIGINT are rejected observably rather than rounded or wrapped.
+The schema uses a request-time index and a composite request/attempt primary
+key, with cascading child deletion. Embedded migrations and their version
+record commit under one transaction-scoped advisory lock. Unknown schema
+versions fail startup. Use authenticated TLS for remote database connections;
+the Compose TLS exception applies only to its private local demo network.
 
 ## Usage and estimated cost accounting
 

@@ -30,7 +30,25 @@ jobs:
       - name: Build RouteForge image
         run: docker compose build
 
-      - name: Start observability stack
+      - name: Verify clean PostgreSQL state
+        run: |
+          docker compose up -d postgres
+          for attempt in $(seq 1 60); do
+            if docker compose exec -T postgres pg_isready -U routeforge_local -d routeforge >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "PostgreSQL did not become ready" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          table_count="$(docker compose exec -T postgres \
+            psql -U routeforge_local -d routeforge -Atqc \
+            "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'routeforge_%';")"
+          test "$table_count" -eq 0
+
+      - name: Start RouteForge observability stack
         run: |
           docker compose up -d
           docker compose ps
@@ -42,7 +60,7 @@ jobs:
         if: failure()
         run: |
           docker compose ps
-          docker compose logs --no-color --tail=200 routeforge prometheus grafana
+          docker compose logs --no-color --tail=200 postgres routeforge prometheus grafana
 
       - name: Tear down observability stack
         if: always()

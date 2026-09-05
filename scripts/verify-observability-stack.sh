@@ -100,20 +100,86 @@ wait_for_grafana_dashboard() {
   return 1
 }
 
+postgres_value() {
+  docker compose exec -T postgres \
+    psql -v ON_ERROR_STOP=1 -U routeforge_local -d routeforge -Atqc "$1"
+}
+
+wait_for_postgres_count() {
+  table_name="$1"
+  minimum="$2"
+  attempt=1
+  while [ "$attempt" -le "$poll_attempts" ]; do
+    count="$(postgres_value "SELECT count(*) FROM $table_name;")"
+    if [ "$count" -ge "$minimum" ]; then
+      echo "$table_name contains $count rows"
+      return 0
+    fi
+    sleep "$retry_seconds"
+    attempt=$((attempt + 1))
+  done
+  echo "$table_name did not reach $minimum rows" >&2
+  return 1
+}
+
 wait_for_url "RouteForge" "$routeforge_url/health"
 wait_for_url "Prometheus" "$prometheus_url/-/ready"
 wait_for_url "Grafana" "$grafana_url/api/health"
 wait_for_routeforge_target
 
+requests_before_traffic="$(postgres_value 'SELECT count(*) FROM routeforge_requests;')"
+attempts_before_traffic="$(postgres_value 'SELECT count(*) FROM routeforge_provider_attempts;')"
 ./scripts/generate-demo-traffic.sh "${1:-24}"
 
 for metric_name in \
   routeforge_requests_total \
   routeforge_provider_attempts_total \
   routeforge_tokens_total \
-  routeforge_estimated_cost_micro_usd_total; do
+  routeforge_estimated_cost_micro_usd_total \
+  routeforge_persistence_records_total; do
   wait_for_positive_metric "$metric_name"
 done
+
+initial_request_count="${1:-24}"
+wait_for_postgres_count routeforge_requests "$((requests_before_traffic + initial_request_count))"
+wait_for_postgres_count routeforge_provider_attempts "$((attempts_before_traffic + initial_request_count))"
+
+orphaned_attempts="$(postgres_value '
+  SELECT count(*)
+  FROM routeforge_provider_attempts AS attempts
+  LEFT JOIN routeforge_requests AS requests USING (request_id)
+  WHERE requests.request_id IS NULL;
+')"
+if [ "$orphaned_attempts" -ne 0 ]; then
+  echo "PostgreSQL contains provider attempts without parent requests" >&2
+  exit 1
+fi
+
+migration_state="$(postgres_value "SELECT count(*) || ':' || max(version) FROM routeforge_schema_migrations;")"
+if [ "$migration_state" != "1:1" ]; then
+  echo "unexpected RouteForge migration state" >&2
+  exit 1
+fi
+echo "PostgreSQL migration and request-attempt relationships are valid"
+
+persisted_before_restart="$(postgres_value 'SELECT count(*) FROM routeforge_requests;')"
+docker compose restart routeforge >/dev/null
+wait_for_url "RouteForge after restart" "$routeforge_url/health"
+persisted_after_restart="$(postgres_value 'SELECT count(*) FROM routeforge_requests;')"
+if [ "$persisted_after_restart" -ne "$persisted_before_restart" ]; then
+  echo "persisted request count changed across RouteForge restart" >&2
+  exit 1
+fi
+
+./scripts/generate-demo-traffic.sh 2
+wait_for_postgres_count routeforge_requests "$((persisted_before_restart + 2))"
+if [ "$(postgres_value "SELECT count(*) || ':' || max(version) FROM routeforge_schema_migrations;")" != "1:1" ]; then
+  echo "migration state changed after RouteForge restart" >&2
+  exit 1
+fi
+wait_for_routeforge_target
+wait_for_url "Grafana after RouteForge restart" "$grafana_url/api/health"
+echo "PostgreSQL history survived restart and accepted new records"
 
 rules_json="$(curl --fail --silent --show-error --max-time 5 "$prometheus_url/api/v1/rules?type=alert")"
 for rule_name in \
