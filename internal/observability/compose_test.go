@@ -9,16 +9,20 @@ import (
 func TestComposeObservabilityTopology(t *testing.T) {
 	compose := readDeploymentFile(t, "../../compose.yml")
 	for _, required := range []string{
+		"  postgres:\n",
 		"  routeforge:\n",
 		"  prometheus:\n",
 		"  grafana:\n",
 		"ROUTEFORGE_PROVIDER: mock",
 		"ROUTEFORGE_METRICS_ADDR: 0.0.0.0:9090",
 		"ROUTEFORGE_OTEL_ENABLED: \"false\"",
+		"ROUTEFORGE_POSTGRES_ENABLED: \"true\"",
+		"ROUTEFORGE_DATABASE_URL: postgres://routeforge_local:routeforge_local_only@postgres:5432/routeforge?sslmode=disable",
 		"ROUTEFORGE_PRICE_MOCK_INPUT_USD_PER_MILLION: \"2.000000\"",
 		"ROUTEFORGE_PRICE_MOCK_OUTPUT_USD_PER_MILLION: \"8.000000\"",
 		"image: prom/prometheus:v3.13.2",
 		"image: grafana/grafana:13.2.1",
+		"image: postgres:17.11-bookworm",
 		"127.0.0.1:8080:8080",
 		"127.0.0.1:9091:9090",
 		"127.0.0.1:3000:3000",
@@ -33,6 +37,8 @@ func TestComposeObservabilityTopology(t *testing.T) {
 		"grafana/provisioning:/etc/grafana/provisioning:ro",
 		"grafana/dashboards:/var/lib/grafana/dashboards:ro",
 		"condition: service_healthy",
+		"postgres-data:/var/lib/postgresql/data",
+		"pg_isready -U routeforge_local -d routeforge",
 	} {
 		if !strings.Contains(compose, required) {
 			t.Errorf("compose.yml is missing %q", required)
@@ -43,7 +49,6 @@ func TestComposeObservabilityTopology(t *testing.T) {
 		"ANTHROPIC_API_KEY",
 		"GF_SECURITY_ADMIN_PASSWORD",
 		"redis:",
-		"postgres:",
 		"0.0.0.0:8080:8080",
 		"0.0.0.0:9090:9090",
 		"0.0.0.0:3000:3000",
@@ -54,6 +59,9 @@ func TestComposeObservabilityTopology(t *testing.T) {
 	}
 	if strings.Contains(compose, "127.0.0.1:9090:9090") {
 		t.Error("RouteForge metrics port must remain private to the Compose network")
+	}
+	if strings.Contains(compose, "5432:5432") {
+		t.Error("PostgreSQL must remain private to the Compose network")
 	}
 }
 
@@ -80,7 +88,7 @@ func TestComposeServiceDiscoveryConfiguration(t *testing.T) {
 func TestRouteForgeImageRunsNonRoot(t *testing.T) {
 	dockerfile := readDeploymentFile(t, "../../Dockerfile")
 	for _, required := range []string{
-		"FROM golang:1.22.12-alpine3.21 AS builder",
+		"FROM golang:1.26.6-alpine3.23 AS builder",
 		"FROM alpine:3.21.6",
 		"CGO_ENABLED=0 GOOS=linux go build",
 		"USER 65532:65532",
@@ -105,10 +113,12 @@ func TestComposeSmokeWorkflowCoversRuntimeIntegration(t *testing.T) {
 		"persist-credentials: false",
 		"docker compose config --quiet",
 		"docker compose build",
+		"docker compose up -d postgres",
+		"pg_tables",
 		"docker compose up -d",
 		"./scripts/verify-observability-stack.sh 24",
 		"if: failure()",
-		"docker compose logs --no-color --tail=200 routeforge prometheus grafana",
+		"docker compose logs --no-color --tail=200 postgres routeforge prometheus grafana",
 		"if: always()",
 		"docker compose down -v --remove-orphans",
 	} {
@@ -140,6 +150,11 @@ func TestComposeSmokeVerificationChecksProvisionedStack(t *testing.T) {
 		"routeforge_provider_attempts_total",
 		"routeforge_tokens_total",
 		"routeforge_estimated_cost_micro_usd_total",
+		"routeforge_persistence_records_total",
+		"routeforge_requests",
+		"routeforge_provider_attempts",
+		"routeforge_schema_migrations",
+		"docker compose restart routeforge",
 		"/api/v1/rules?type=alert",
 		"RouteForgeCircuitOpening",
 		"/api/dashboards/uid/routeforge-overview",
