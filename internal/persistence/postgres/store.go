@@ -23,6 +23,7 @@ var migrations = []struct {
 	path    string
 }{
 	{version: 1, path: "migrations/0001_initial.sql"},
+	{version: 2, path: "migrations/0002_cache_hit.sql"},
 }
 
 type Store struct {
@@ -73,11 +74,11 @@ func (s *Store) Write(ctx context.Context, record persistence.RequestRecord) err
 		INSERT INTO routeforge_requests (
 			request_id, started_at, completed_at, routing_policy, streaming,
 			logical_model, initial_provider, final_provider, outcome,
-			attempt_count, fallback_count, request_duration_us
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			attempt_count, fallback_count, request_duration_us, cache_hit
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`, record.RequestID, record.StartedAt.UTC(), record.CompletedAt.UTC(), record.RoutingPolicy,
 		record.Streaming, record.LogicalModel, record.InitialProvider, record.FinalProvider,
-		record.Outcome, record.AttemptCount, record.FallbackCount, record.DurationUS)
+		record.Outcome, record.AttemptCount, record.FallbackCount, record.DurationUS, record.CacheHit)
 	if err != nil {
 		return err
 	}
@@ -143,7 +144,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	var unsupported bool
-	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM routeforge_schema_migrations WHERE version <> 1)").Scan(&unsupported); err != nil {
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM routeforge_schema_migrations WHERE version NOT IN (1, 2))").Scan(&unsupported); err != nil {
 		return err
 	}
 	if unsupported {

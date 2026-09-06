@@ -1,0 +1,2 @@
+ALTER TABLE routeforge_requests
+    ADD COLUMN cache_hit BOOLEAN NOT NULL DEFAULT FALSE;

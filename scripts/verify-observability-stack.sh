@@ -142,7 +142,9 @@ done
 
 initial_request_count="${1:-24}"
 wait_for_postgres_count routeforge_requests "$((requests_before_traffic + initial_request_count))"
-wait_for_postgres_count routeforge_provider_attempts "$((attempts_before_traffic + initial_request_count))"
+# Every streaming request invokes the provider. Repeated synchronous requests
+# may now reuse Redis, so request counts and attempt counts intentionally differ.
+wait_for_postgres_count routeforge_provider_attempts "$((attempts_before_traffic + initial_request_count / 2))"
 
 orphaned_attempts="$(postgres_value '
   SELECT count(*)
@@ -156,7 +158,7 @@ if [ "$orphaned_attempts" -ne 0 ]; then
 fi
 
 migration_state="$(postgres_value "SELECT count(*) || ':' || max(version) FROM routeforge_schema_migrations;")"
-if [ "$migration_state" != "1:1" ]; then
+if [ "$migration_state" != "2:2" ]; then
   echo "unexpected RouteForge migration state" >&2
   exit 1
 fi
@@ -173,7 +175,7 @@ fi
 
 ./scripts/generate-demo-traffic.sh 2
 wait_for_postgres_count routeforge_requests "$((persisted_before_restart + 2))"
-if [ "$(postgres_value "SELECT count(*) || ':' || max(version) FROM routeforge_schema_migrations;")" != "1:1" ]; then
+if [ "$(postgres_value "SELECT count(*) || ':' || max(version) FROM routeforge_schema_migrations;")" != "2:2" ]; then
   echo "migration state changed after RouteForge restart" >&2
   exit 1
 fi
@@ -219,5 +221,7 @@ if ! curl --fail --silent --show-error --max-time 10 \
   exit 1
 fi
 echo "Grafana datasource is provisioned and can query Prometheus"
+
+./scripts/verify-response-cache.sh
 
 echo "RouteForge observability stack smoke verification passed."

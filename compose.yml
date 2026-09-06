@@ -1,4 +1,19 @@
 services:
+  redis:
+    image: redis:8.2.9-alpine3.22
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    expose:
+      - "6379"
+    tmpfs:
+      - /data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   postgres:
     image: postgres:17.11-bookworm
     environment:
@@ -26,6 +41,9 @@ services:
       ROUTEFORGE_METRICS_ENABLED: "true"
       ROUTEFORGE_OTEL_ENABLED: "false"
       ROUTEFORGE_POSTGRES_ENABLED: "true"
+      ROUTEFORGE_CACHE_ENABLED: "true"
+      ROUTEFORGE_REDIS_URL: redis://redis:6379
+      ROUTEFORGE_CACHE_TTL: 5m
       ROUTEFORGE_DATABASE_URL: postgres://routeforge_local:routeforge_local_only@postgres:5432/routeforge?sslmode=disable
       ROUTEFORGE_PRICE_MOCK_INPUT_USD_PER_MILLION: "2.000000"
       ROUTEFORGE_PRICE_MOCK_OUTPUT_USD_PER_MILLION: "8.000000"
@@ -50,6 +68,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
 
   prometheus:
     image: prom/prometheus:v3.13.2

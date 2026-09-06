@@ -36,6 +36,22 @@ func TestInitialMigrationDefinesOperationalHistoryOnly(t *testing.T) {
 	}
 }
 
+func TestCacheMigrationAddsOnlyOperationalFlag(t *testing.T) {
+	data, err := migrationFiles.ReadFile("migrations/0002_cache_hit.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := strings.ToLower(string(data))
+	if !strings.Contains(sql, "add column cache_hit boolean not null default false") {
+		t.Fatal("missing cache history flag")
+	}
+	for _, forbidden := range []string{"cache_key", "hash", "content", "prompt", "response"} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatal("cache migration stores sensitive metadata")
+		}
+	}
+}
+
 func TestValidateRecordPreservesNullableOperationalValues(t *testing.T) {
 	now := time.Now()
 	record := persistence.RequestRecord{

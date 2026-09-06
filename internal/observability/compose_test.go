@@ -10,6 +10,12 @@ func TestComposeObservabilityTopology(t *testing.T) {
 	compose := readDeploymentFile(t, "../../compose.yml")
 	for _, required := range []string{
 		"  postgres:\n",
+		"  redis:\n",
+		"redis:8.2.9-alpine3.22",
+		"ROUTEFORGE_CACHE_ENABLED: \"true\"",
+		"ROUTEFORGE_REDIS_URL: redis://redis:6379",
+		"\"--save\", \"\", \"--appendonly\", \"no\"",
+		"\"--maxmemory\", \"64mb\", \"--maxmemory-policy\", \"allkeys-lru\"",
 		"  routeforge:\n",
 		"  prometheus:\n",
 		"  grafana:\n",
@@ -48,7 +54,8 @@ func TestComposeObservabilityTopology(t *testing.T) {
 		"OPENAI_API_KEY",
 		"ANTHROPIC_API_KEY",
 		"GF_SECURITY_ADMIN_PASSWORD",
-		"redis:",
+		"6379:6379",
+		"redis-data:",
 		"0.0.0.0:8080:8080",
 		"0.0.0.0:9090:9090",
 		"0.0.0.0:3000:3000",
@@ -118,7 +125,7 @@ func TestComposeSmokeWorkflowCoversRuntimeIntegration(t *testing.T) {
 		"docker compose up -d",
 		"./scripts/verify-observability-stack.sh 24",
 		"if: failure()",
-		"docker compose logs --no-color --tail=200 postgres routeforge prometheus grafana",
+		"docker compose logs --no-color --tail=200 redis postgres routeforge prometheus grafana",
 		"if: always()",
 		"docker compose down -v --remove-orphans",
 	} {

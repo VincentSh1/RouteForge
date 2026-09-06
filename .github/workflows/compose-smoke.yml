@@ -60,7 +60,7 @@ jobs:
         if: failure()
         run: |
           docker compose ps
-          docker compose logs --no-color --tail=200 postgres routeforge prometheus grafana
+          docker compose logs --no-color --tail=200 redis postgres routeforge prometheus grafana
 
       - name: Tear down observability stack
         if: always()
