@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/VincentSh1/RouteForge/internal/accounting"
+	"github.com/VincentSh1/RouteForge/internal/cache"
 )
 
 const (
@@ -63,6 +64,9 @@ type Config struct {
 	MetricsAddr                         string
 	PostgresEnabled                     bool
 	DatabaseURL                         string
+	CacheEnabled                        bool
+	RedisURL                            string
+	CacheTTL                            time.Duration
 	Provider                            string
 	OpenAIAPIKey                        string
 	AnthropicAPIKey                     string
@@ -102,6 +106,8 @@ func Load() (Config, error) {
 		OTelExporterOTLPEndpoint:   strings.TrimSpace(os.Getenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT")),
 		MetricsAddr:                strings.TrimSpace(envOrDefault("ROUTEFORGE_METRICS_ADDR", defaultMetricsAddr)),
 		DatabaseURL:                strings.TrimSpace(os.Getenv("ROUTEFORGE_DATABASE_URL")),
+		RedisURL:                   strings.TrimSpace(os.Getenv("ROUTEFORGE_REDIS_URL")),
+		CacheTTL:                   cache.DefaultTTL,
 	}
 	for _, value := range []struct {
 		key    string
@@ -110,6 +116,7 @@ func Load() (Config, error) {
 		{key: "ROUTEFORGE_OTEL_ENABLED", target: &cfg.OTelEnabled},
 		{key: "ROUTEFORGE_METRICS_ENABLED", target: &cfg.MetricsEnabled},
 		{key: "ROUTEFORGE_POSTGRES_ENABLED", target: &cfg.PostgresEnabled},
+		{key: "ROUTEFORGE_CACHE_ENABLED", target: &cfg.CacheEnabled},
 	} {
 		if raw := strings.TrimSpace(os.Getenv(value.key)); raw != "" {
 			enabled, err := strconv.ParseBool(raw)
@@ -142,6 +149,7 @@ func Load() (Config, error) {
 		{"ROUTEFORGE_STREAM_IDLE_TIMEOUT", &cfg.StreamIdleTimeout},
 		{"ROUTEFORGE_CIRCUIT_OPEN_DURATION", &cfg.CircuitOpenDuration},
 		{"ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", &cfg.RoutingSampleMaxAge},
+		{"ROUTEFORGE_CACHE_TTL", &cfg.CacheTTL},
 	}
 	if raw := os.Getenv("ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD"); raw != "" {
 		threshold, err := strconv.Atoi(raw)
@@ -187,6 +195,12 @@ func Load() (Config, error) {
 		*value.target = duration
 	}
 
+	if cfg.CacheTTL < time.Millisecond {
+		return Config{}, validationError("ROUTEFORGE_CACHE_TTL must be at least 1ms")
+	}
+	if cfg.CacheEnabled && cache.ValidateURL(cfg.RedisURL) != nil {
+		return Config{}, validationError("ROUTEFORGE_CACHE_ENABLED=true requires a valid ROUTEFORGE_REDIS_URL")
+	}
 	if cfg.Addr == "" {
 		return Config{}, validationError("ROUTEFORGE_ADDR must not be empty")
 	}

@@ -28,6 +28,8 @@ type Metrics struct {
 	tokens             metric.Int64Counter
 	estimatedCost      metric.Int64Counter
 	persistenceRecords metric.Int64Counter
+	cacheLookups       metric.Int64Counter
+	cacheWrites        metric.Int64Counter
 }
 
 func NewMetrics(meter metric.Meter) (*Metrics, error) {
@@ -87,7 +89,16 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 	if err != nil {
 		return nil, err
 	}
+	cacheLookups, err := meter.Int64Counter("routeforge_cache_lookups", metric.WithDescription("Completion cache lookup results"))
+	if err != nil {
+		return nil, err
+	}
+	cacheWrites, err := meter.Int64Counter("routeforge_cache_writes", metric.WithDescription("Completion cache write results"))
+	if err != nil {
+		return nil, err
+	}
 	return &Metrics{
+		cacheLookups: cacheLookups, cacheWrites: cacheWrites,
 		requests: requests, requestDuration: requestDuration,
 		routingSelections: routingSelections,
 		providerAttempts:  providerAttempts, providerDuration: providerDuration, providerTTFC: providerTTFC,
@@ -97,6 +108,26 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 }
 
 func NoopMetrics() *Metrics { return &Metrics{} }
+
+func (m *Metrics) RecordCacheLookup(ctx context.Context, result string) {
+	if m == nil || m.cacheLookups == nil {
+		return
+	}
+	if result != "hit" && result != "miss" && result != "error" {
+		return
+	}
+	m.cacheLookups.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+}
+
+func (m *Metrics) RecordCacheWrite(ctx context.Context, result string) {
+	if m == nil || m.cacheWrites == nil {
+		return
+	}
+	if result != "success" && result != "error" {
+		return
+	}
+	m.cacheWrites.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+}
 
 func (m *Metrics) RecordRequest(ctx context.Context, routingPolicy string, streaming bool, outcome string, duration time.Duration) {
 	if m == nil || m.requests == nil {

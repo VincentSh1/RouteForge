@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/VincentSh1/RouteForge/internal/accounting"
+	rediscache "github.com/VincentSh1/RouteForge/internal/cache/redis"
 	"github.com/VincentSh1/RouteForge/internal/config"
 	"github.com/VincentSh1/RouteForge/internal/gateway"
 	"github.com/VincentSh1/RouteForge/internal/httpapi"
@@ -81,6 +82,14 @@ func run() error {
 	service.SetTracer(observabilitySetup.Tracer())
 	service.SetMetrics(observabilitySetup.Metrics())
 	service.SetPersistence(historyRecorder, nil)
+	if cfg.CacheEnabled {
+		completionCache, err := rediscache.New(cfg.RedisURL)
+		if err != nil {
+			return errors.New("cache initialization failed")
+		}
+		defer completionCache.Close()
+		service.SetCache(completionCache, cfg.CacheTTL)
+	}
 	handler := httpapi.NewHandler(service)
 	routes := httpapi.TraceRequests(handler.Routes(), observabilitySetup.Tracer(), observabilitySetup.Propagator(), cfg.RoutingPolicy, observabilitySetup.Metrics())
 	server := httpapi.NewServer(cfg, routes)

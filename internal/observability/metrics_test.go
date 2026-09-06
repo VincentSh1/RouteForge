@@ -24,6 +24,10 @@ func TestMetricsRecordBoundedLifecycleMeasurements(t *testing.T) {
 	metrics.RecordUsage(ctx, "anthropic", openai.NewUsage(10, 4, 14))
 	metrics.RecordEstimatedCost(ctx, "anthropic", 17)
 	metrics.RecordPersistence(ctx, "written")
+	metrics.RecordCacheLookup(ctx, "hit")
+	metrics.RecordCacheLookup(ctx, "uncontrolled-value")
+	metrics.RecordCacheWrite(ctx, "success")
+	metrics.RecordCacheWrite(ctx, "uncontrolled-value")
 
 	collected := collectMetrics(t, reader)
 	assertIntSum(t, collected, "routeforge_requests", 1)
@@ -34,6 +38,8 @@ func TestMetricsRecordBoundedLifecycleMeasurements(t *testing.T) {
 	assertIntSum(t, collected, "routeforge_tokens", 14)
 	assertIntSum(t, collected, "routeforge_estimated_cost_micro_usd", 17)
 	assertIntSum(t, collected, "routeforge_persistence_records", 1)
+	assertIntSum(t, collected, "routeforge_cache_lookups", 1)
+	assertIntSum(t, collected, "routeforge_cache_writes", 1)
 	assertHistogramCount(t, collected, "routeforge_request_duration", 1, durationBuckets)
 	assertHistogramCount(t, collected, "routeforge_provider_duration", 2, durationBuckets)
 	assertHistogramCount(t, collected, "routeforge_provider_ttfc", 1, ttfcBuckets)
@@ -42,7 +48,7 @@ func TestMetricsRecordBoundedLifecycleMeasurements(t *testing.T) {
 		"routing_policy": true, "streaming": true, "outcome": true,
 		"provider": true, "fallback": true, "from_provider": true,
 		"to_provider": true, "reason": true, "from_state": true,
-		"to_state": true, "direction": true,
+		"to_state": true, "direction": true, "result": true,
 	}
 	for _, item := range collected {
 		for _, set := range metricAttributeSets(item.Data) {

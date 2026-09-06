@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/VincentSh1/RouteForge/internal/accounting"
+	"github.com/VincentSh1/RouteForge/internal/cache"
 	"github.com/VincentSh1/RouteForge/internal/model"
 	"github.com/VincentSh1/RouteForge/internal/observability"
 	"github.com/VincentSh1/RouteForge/internal/openai"
@@ -65,6 +66,8 @@ type Service struct {
 	metrics            *observability.Metrics
 	historyRecorder    persistence.Recorder
 	requestIDGenerator persistence.IDGenerator
+	responseCache      cache.Store
+	cacheTTL           time.Duration
 }
 
 func New(p provider.Provider, resolver *model.Resolver) *Service {
@@ -201,6 +204,17 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 		}
 		usableMapping = true
 
+		cacheKey := ""
+		if s.responseCache != nil && s.responseCache.Enabled() && s.health.eligible(item.Name()) && ctx.Err() == nil {
+			cacheKey, _ = cache.Key(req, item.Name(), providerRequest.Model)
+			if cached, hit := s.lookupCompletion(ctx, cacheKey); hit && s.health.eligible(item.Name()) && ctx.Err() == nil {
+				if attemptNumber == 0 {
+					s.metrics.RecordRoutingSelection(ctx, item.Name(), s.routingName, false)
+				}
+				history.cacheHit(item.Name())
+				return cached, nil
+			}
+		}
 		healthAttempt, allowed := s.health.begin(item.Name())
 		if !allowed {
 			recordCircuitSkip(ctx, item.Name())
@@ -228,6 +242,9 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 		if err == nil {
 			if logicalModel {
 				response.Model = req.Model
+			}
+			if cacheKey != "" && ctx.Err() == nil {
+				s.storeCompletion(ctx, cacheKey, response)
 			}
 			return response, nil
 		}

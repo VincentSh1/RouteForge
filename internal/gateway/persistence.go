@@ -62,6 +62,18 @@ func (h *requestHistory) startAttempt(providerName, resolvedModel string) int {
 	return index
 }
 
+func (h *requestHistory) cacheHit(providerName string) {
+	if h == nil {
+		return
+	}
+	provider := boundedMetadata(providerName, maxPersistedProviderLength)
+	h.record.CacheHit = true
+	if h.record.InitialProvider == nil {
+		h.record.InitialProvider = &provider
+	}
+	h.record.FinalProvider = &provider
+}
+
 func (h *requestHistory) finishAttempt(
 	index int,
 	outcome providerOutcome,

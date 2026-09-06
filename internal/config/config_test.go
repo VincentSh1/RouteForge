@@ -451,6 +451,9 @@ func TestPostgresURLValidationDoesNotExposeInput(t *testing.T) {
 }
 
 func setProviderDefaults(t *testing.T) {
+	t.Setenv("ROUTEFORGE_CACHE_ENABLED", "")
+	t.Setenv("ROUTEFORGE_REDIS_URL", "")
+	t.Setenv("ROUTEFORGE_CACHE_TTL", "")
 	t.Helper()
 	t.Setenv("ROUTEFORGE_PROVIDER", ProviderMock)
 	t.Setenv("OPENAI_API_KEY", "")

@@ -14,6 +14,7 @@ type RequestRecord struct {
 	CompletedAt     time.Time
 	RoutingPolicy   string
 	Streaming       bool
+	CacheHit        bool
 	LogicalModel    string
 	InitialProvider *string
 	FinalProvider   *string
