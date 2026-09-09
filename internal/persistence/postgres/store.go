@@ -24,6 +24,7 @@ var migrations = []struct {
 }{
 	{version: 1, path: "migrations/0001_initial.sql"},
 	{version: 2, path: "migrations/0002_cache_hit.sql"},
+	{version: 3, path: "migrations/0003_history_pagination.sql"},
 }
 
 type Store struct {
@@ -144,7 +145,7 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	var unsupported bool
-	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM routeforge_schema_migrations WHERE version NOT IN (1, 2))").Scan(&unsupported); err != nil {
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM routeforge_schema_migrations WHERE version NOT IN (1, 2, 3))").Scan(&unsupported); err != nil {
 		return err
 	}
 	if unsupported {
