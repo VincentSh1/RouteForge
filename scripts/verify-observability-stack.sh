@@ -158,7 +158,7 @@ if [ "$orphaned_attempts" -ne 0 ]; then
 fi
 
 migration_state="$(postgres_value "SELECT count(*) || ':' || max(version) FROM routeforge_schema_migrations;")"
-if [ "$migration_state" != "2:2" ]; then
+if [ "$migration_state" != "3:3" ]; then
   echo "unexpected RouteForge migration state" >&2
   exit 1
 fi
@@ -175,7 +175,7 @@ fi
 
 ./scripts/generate-demo-traffic.sh 2
 wait_for_postgres_count routeforge_requests "$((persisted_before_restart + 2))"
-if [ "$(postgres_value "SELECT count(*) || ':' || max(version) FROM routeforge_schema_migrations;")" != "2:2" ]; then
+if [ "$(postgres_value "SELECT count(*) || ':' || max(version) FROM routeforge_schema_migrations;")" != "3:3" ]; then
   echo "migration state changed after RouteForge restart" >&2
   exit 1
 fi
@@ -223,5 +223,6 @@ fi
 echo "Grafana datasource is provisioned and can query Prometheus"
 
 ./scripts/verify-response-cache.sh
+./scripts/verify-history-api.sh
 
 echo "RouteForge observability stack smoke verification passed."

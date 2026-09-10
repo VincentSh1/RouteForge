@@ -20,6 +20,9 @@ func TestComposeObservabilityTopology(t *testing.T) {
 		"  prometheus:\n",
 		"  grafana:\n",
 		"ROUTEFORGE_PROVIDER: mock",
+		"ROUTEFORGE_ADMIN_ENABLED: \"true\"",
+		"ROUTEFORGE_ADMIN_ADDR: 0.0.0.0:8081",
+		"127.0.0.1:8081:8081",
 		"ROUTEFORGE_METRICS_ADDR: 0.0.0.0:9090",
 		"ROUTEFORGE_OTEL_ENABLED: \"false\"",
 		"ROUTEFORGE_POSTGRES_ENABLED: \"true\"",
@@ -57,6 +60,7 @@ func TestComposeObservabilityTopology(t *testing.T) {
 		"6379:6379",
 		"redis-data:",
 		"0.0.0.0:8080:8080",
+		"0.0.0.0:8081:8081",
 		"0.0.0.0:9090:9090",
 		"0.0.0.0:3000:3000",
 	} {
@@ -168,6 +172,7 @@ func TestComposeSmokeVerificationChecksProvisionedStack(t *testing.T) {
 		"/api/datasources/uid/routeforge-prometheus/health",
 		"http://prometheus:9090",
 		"./scripts/generate-demo-traffic.sh",
+		"./scripts/verify-history-api.sh",
 	} {
 		if !strings.Contains(script, required) {
 			t.Errorf("observability verification script is missing %q", required)
