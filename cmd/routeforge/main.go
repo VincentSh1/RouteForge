@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/VincentSh1/RouteForge/internal/accounting"
+	"github.com/VincentSh1/RouteForge/internal/adminapi"
 	rediscache "github.com/VincentSh1/RouteForge/internal/cache/redis"
 	"github.com/VincentSh1/RouteForge/internal/config"
 	"github.com/VincentSh1/RouteForge/internal/gateway"
@@ -61,7 +62,7 @@ func run() error {
 		}
 	}()
 
-	historyRecorder, historyShutdown, err := initializePersistence(cfg, observabilitySetup.Metrics())
+	historyRecorder, historyReader, historyShutdown, err := initializePersistence(cfg, observabilitySetup.Metrics())
 	if err != nil {
 		return err
 	}
@@ -99,6 +100,9 @@ func run() error {
 		metricsMux.Handle("/metrics", observabilitySetup.MetricsHandler())
 		servers = append(servers, httpapi.NewMetricsServer(cfg, metricsMux))
 	}
+	if cfg.AdminEnabled {
+		servers = append(servers, adminapi.NewServer(cfg.AdminAddr, historyReader))
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -113,7 +117,7 @@ func run() error {
 			if i == 0 {
 				return fmt.Errorf("API listener failed to start")
 			}
-			return fmt.Errorf("metrics listener failed to start")
+			return fmt.Errorf("operational listener failed to start")
 		}
 		listeners = append(listeners, listener)
 	}
@@ -149,20 +153,20 @@ func run() error {
 	return errors.Join(shutdownErrors...)
 }
 
-func initializePersistence(cfg config.Config, metrics *observability.Metrics) (persistence.Recorder, func(context.Context) error, error) {
+func initializePersistence(cfg config.Config, metrics *observability.Metrics) (persistence.Recorder, persistence.Reader, func(context.Context) error, error) {
 	if !cfg.PostgresEnabled {
-		return persistence.NoopRecorder{}, nil, nil
+		return persistence.NoopRecorder{}, nil, nil, nil
 	}
 	startupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	store, err := postgrespersistence.Open(startupCtx, cfg.DatabaseURL)
 	if err != nil {
-		return nil, nil, errors.New("PostgreSQL persistence initialization failed")
+		return nil, nil, nil, errors.New("PostgreSQL persistence initialization failed")
 	}
 	recorder := persistence.NewAsyncRecorder(store, persistence.DefaultQueueCapacity, func(outcome persistence.WriteOutcome) {
 		metrics.RecordPersistence(context.Background(), string(outcome))
 	})
-	return recorder, recorder.Shutdown, nil
+	return recorder, store, recorder.Shutdown, nil
 }
 
 func buildService(cfg config.Config) (*gateway.Service, error) {

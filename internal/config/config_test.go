@@ -451,6 +451,8 @@ func TestPostgresURLValidationDoesNotExposeInput(t *testing.T) {
 }
 
 func setProviderDefaults(t *testing.T) {
+	t.Setenv("ROUTEFORGE_ADMIN_ENABLED", "")
+	t.Setenv("ROUTEFORGE_ADMIN_ADDR", defaultAdminAddr)
 	t.Setenv("ROUTEFORGE_CACHE_ENABLED", "")
 	t.Setenv("ROUTEFORGE_REDIS_URL", "")
 	t.Setenv("ROUTEFORGE_CACHE_TTL", "")

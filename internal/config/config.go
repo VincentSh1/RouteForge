@@ -27,6 +27,7 @@ const (
 	defaultRoutingSampleMaxAge        = 5 * time.Minute
 	defaultRoutingExplorationInterval = 10
 	defaultMetricsAddr                = "127.0.0.1:9090"
+	defaultAdminAddr                  = "127.0.0.1:8081"
 	defaultProvider                   = "mock"
 	defaultRoutingPolicy              = RoutingPolicyDeterministic
 )
@@ -64,6 +65,8 @@ type Config struct {
 	MetricsAddr                         string
 	PostgresEnabled                     bool
 	DatabaseURL                         string
+	AdminEnabled                        bool
+	AdminAddr                           string
 	CacheEnabled                        bool
 	RedisURL                            string
 	CacheTTL                            time.Duration
@@ -106,6 +109,7 @@ func Load() (Config, error) {
 		OTelExporterOTLPEndpoint:   strings.TrimSpace(os.Getenv("ROUTEFORGE_OTEL_EXPORTER_OTLP_ENDPOINT")),
 		MetricsAddr:                strings.TrimSpace(envOrDefault("ROUTEFORGE_METRICS_ADDR", defaultMetricsAddr)),
 		DatabaseURL:                strings.TrimSpace(os.Getenv("ROUTEFORGE_DATABASE_URL")),
+		AdminAddr:                  strings.TrimSpace(envOrDefault("ROUTEFORGE_ADMIN_ADDR", defaultAdminAddr)),
 		RedisURL:                   strings.TrimSpace(os.Getenv("ROUTEFORGE_REDIS_URL")),
 		CacheTTL:                   cache.DefaultTTL,
 	}
@@ -116,6 +120,7 @@ func Load() (Config, error) {
 		{key: "ROUTEFORGE_OTEL_ENABLED", target: &cfg.OTelEnabled},
 		{key: "ROUTEFORGE_METRICS_ENABLED", target: &cfg.MetricsEnabled},
 		{key: "ROUTEFORGE_POSTGRES_ENABLED", target: &cfg.PostgresEnabled},
+		{key: "ROUTEFORGE_ADMIN_ENABLED", target: &cfg.AdminEnabled},
 		{key: "ROUTEFORGE_CACHE_ENABLED", target: &cfg.CacheEnabled},
 	} {
 		if raw := strings.TrimSpace(os.Getenv(value.key)); raw != "" {
@@ -207,6 +212,19 @@ func Load() (Config, error) {
 	if cfg.OTelEnabled {
 		if err := validateOTLPEndpoint(cfg.OTelExporterOTLPEndpoint); err != nil {
 			return Config{}, err
+		}
+	}
+	if cfg.AdminEnabled {
+		if !cfg.PostgresEnabled {
+			return Config{}, validationError("ROUTEFORGE_ADMIN_ENABLED=true requires ROUTEFORGE_POSTGRES_ENABLED=true")
+		}
+		host, port, err := net.SplitHostPort(cfg.AdminAddr)
+		if err != nil || host == "" {
+			return Config{}, validationError("ROUTEFORGE_ADMIN_ADDR must be an explicit host:port address")
+		}
+		number, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || number == 0 {
+			return Config{}, validationError("ROUTEFORGE_ADMIN_ADDR must use a port between 1 and 65535")
 		}
 	}
 	if cfg.MetricsEnabled {
