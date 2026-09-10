@@ -19,6 +19,9 @@ func TestComposeObservabilityTopology(t *testing.T) {
 		"  routeforge:\n",
 		"  prometheus:\n",
 		"  grafana:\n",
+		"  console:\n",
+		"context: ./web",
+		"127.0.0.1:3001:8080",
 		"ROUTEFORGE_PROVIDER: mock",
 		"ROUTEFORGE_ADMIN_ENABLED: \"true\"",
 		"ROUTEFORGE_ADMIN_ADDR: 0.0.0.0:8081",
@@ -63,6 +66,7 @@ func TestComposeObservabilityTopology(t *testing.T) {
 		"0.0.0.0:8081:8081",
 		"0.0.0.0:9090:9090",
 		"0.0.0.0:3000:3000",
+		"0.0.0.0:3001:8080",
 	} {
 		if strings.Contains(compose, prohibited) {
 			t.Errorf("compose.yml contains prohibited value %q", prohibited)
@@ -173,6 +177,7 @@ func TestComposeSmokeVerificationChecksProvisionedStack(t *testing.T) {
 		"http://prometheus:9090",
 		"./scripts/generate-demo-traffic.sh",
 		"./scripts/verify-history-api.sh",
+		"./scripts/verify-console.sh",
 	} {
 		if !strings.Contains(script, required) {
 			t.Errorf("observability verification script is missing %q", required)

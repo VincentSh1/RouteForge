@@ -15,3 +15,7 @@ coverage.txt
 .idea/
 .vscode/
 .DS_Store
+
+# Console build and dependency artifacts
+/web/node_modules/
+/web/dist/

@@ -13,8 +13,8 @@ cost-, or latency-constrained cost routing.
 - Streaming and non-streaming chat completions through provider interfaces
 - OpenAI-style success and error responses
 
-Authentication, caching, rate limiting, semantic-quality routing,
-and an application control-plane UI are intentionally out of scope. Optional
+Authentication, rate limiting, and semantic-quality routing
+are intentionally out of scope. A local read-only React console, optional
 OpenTelemetry tracing, Prometheus metrics, and a provisionable Grafana
 operations dashboard are documented below.
 
@@ -465,7 +465,7 @@ loopback.
 ## Local observability demo
 
 The repository includes a minimal Compose stack for a reproducible local
-RouteForge, PostgreSQL, Prometheus, and Grafana demo. Docker with Compose is
+RouteForge, Redis, PostgreSQL, Prometheus, and Grafana demo. Docker with Compose is
 the only runtime prerequisite; the traffic script runs its HTTP client inside
 the RouteForge container.
 
@@ -493,7 +493,7 @@ Open the automatically provisioned **RouteForge Overview** dashboard at
 loopback-only development stack, so no repository credential is required.
 Optional Prometheus debugging is available at <http://127.0.0.1:9091>.
 
-Stop the services while retaining local Prometheus and Grafana data:
+Stop the services while retaining local PostgreSQL, Prometheus, and Grafana data:
 
 ```sh
 docker compose down
@@ -505,18 +505,19 @@ To deliberately remove the named data volumes as well:
 docker compose down -v
 ```
 
-The stack uses the mock provider, enables PostgreSQL persistence and metrics,
+The stack uses the mock provider, enables Redis caching, PostgreSQL persistence,
+the read-only admin API, and metrics,
 and leaves OTLP tracing disabled. RouteForge binds `0.0.0.0` only inside its
 container so Prometheus can scrape `routeforge:9090` over the private Compose
-network. The host API, Prometheus UI, and Grafana ports are restricted to
-`127.0.0.1`; neither the RouteForge metrics port nor PostgreSQL is published to
+network. The host inference/admin API, Prometheus UI, and Grafana ports are restricted to
+`127.0.0.1`; neither the RouteForge metrics port, Redis, nor PostgreSQL is published to
 the host.
 
 Mock prices of 2 fictional USD per million input tokens and 8 fictional USD per
 million output tokens are configured solely to populate estimated-cost panels.
 They are synthetic demo pricing, not commercial pricing or an invoice estimate.
 The stack pins Go 1.26.6 (Alpine 3.23 builder), Alpine 3.21.6 runtime,
-PostgreSQL 17.11-bookworm, Prometheus 3.13.2, and Grafana 13.2.1
+Redis 8.2.9-alpine3.22, PostgreSQL 17.11-bookworm, Prometheus 3.13.2, and Grafana 13.2.1
 instead of using floating image tags. Prometheus and Grafana runtime data live
 in named volumes, while scrape, alert, datasource, and dashboard configuration
 is mounted read-only.
@@ -529,11 +530,77 @@ TTFC, token, and estimated-cost panels. Fallback and circuit panels may remain
 empty because the demo does not fabricate provider failures.
 
 The Compose stack is also exercised by a focused GitHub Actions smoke test.
-It builds the RouteForge image, starts all four services, generates bounded
+It builds the RouteForge and console images, starts all six services, generates bounded
 mock traffic, verifies durable request and attempt rows across a RouteForge
 restart, verifies Prometheus scraping, metrics, and alert rules, confirms
 Grafana dashboard and datasource provisioning, and always removes the CI
 containers and volumes afterward. The workflow uses no provider credentials.
+It also verifies cache miss/write/hit behavior, absence of provider attempts
+on hits, PostgreSQL cache metadata, reuse across a RouteForge restart, and
+successful inference while Redis is stopped followed by cache recovery.
+
+## Optional Redis response caching
+
+```sh
+export ROUTEFORGE_CACHE_ENABLED="true"
+export ROUTEFORGE_REDIS_URL="redis://127.0.0.1:6379"
+export ROUTEFORGE_CACHE_TTL="5m"
+```
+
+Caching is disabled by default; disabled mode creates no Redis client. Enabled
+mode requires a valid `redis://` or `rediss://` URL (optional database path,
+no query options). Use authenticated `rediss://` with verified TLS outside a
+trusted local network. The client is go-redis v9.22.0. Malformed configuration
+fails startup; temporary Redis unavailability does not prevent startup or
+inference. TTL must be at least 1ms and defaults to five minutes.
+
+Normal routing selects an eligible provider and resolves its native model
+before cache lookup. Streaming bypasses caching entirely. Only valid
+non-streaming requests and successful normal assistant completions with a
+`stop` finish reason are cached; failures and truncated/partial responses are
+excluded. The supported request fields are model, ordered role/content
+messages, and streaming mode; no temperature or other randomness controls are
+currently supported. Enabling caching intentionally reuses previous answers
+for identical eligible requests, even if an uncached provider might generate
+a different answer.
+
+Keys use `routeforge:chat:v1:` followed by a fixed-size SHA-256 hex digest of
+the complete supported request, provider, and resolved model. Key names contain
+no raw messages. The versioned JSON value stores only the normalized completion
+and is limited to 1 MiB. Reads use bounded Redis GETRANGE to reject oversized
+values without retrieving them in full. Unknown/malformed values fail open.
+No request body, cache key, hash, or cached text enters PostgreSQL, logs, metrics,
+or traces. Redis values **do contain generated response content** and must be
+treated as sensitive transient data. Identical requests share entries across
+callers; this phase has no user or tenant isolation.
+
+GET and SET operations each have a fixed 50ms timeout; command retries are
+disabled and connection dialing gets one attempt. SET is synchronous and
+tightly bounded, adding at most one operation budget after a successful
+provider call. There is no write queue or goroutine per request. Lookup errors
+fall through to normal provider admission; write errors preserve the successful
+response. A cache hit never reserves a half-open trial or updates provider
+health, latency, token usage, or estimated cost. Its client-visible usage and
+completion ID/timestamp describe the original generation. Routing selection
+metrics still count the selected provider; no provider attempt span is created.
+
+PostgreSQL migration 0002 adds only `cache_hit`. A hit records a successful
+request and the provider whose entry was selected, with no fabricated attempt.
+If an earlier actual attempt failed, that attempt remains in the chain.
+Attempt/fallback counters continue counting actual upstream invocations; a
+cache-served fallback does not increment the existing provider-fallback metric.
+`routeforge_cache_lookups_total{result="hit|miss|error"}` and
+`routeforge_cache_writes_total{result="success|error"}` report cache operations
+without provider/model/key labels. Traces use only a bounded `cache.result`
+event. No saved-cost or semantic-quality estimates are calculated.
+
+Compose Redis is private, uses a 64 MiB `allkeys-lru` cache, and disables AOF/RDB
+persistence with a tmpfs data directory and no data volume. Entries may survive
+a RouteForge-only restart, but are lost when Redis restarts. PostgreSQL remains
+the durable operational history store. Expiration and the version prefix are
+the only invalidation mechanisms; concurrent misses may invoke a provider more
+than once. There are no distributed locks, singleflight, invalidation APIs,
+or background scans. Offline benchmark runs never initialize Redis.
 
 ## PostgreSQL operational history
 
@@ -562,8 +629,8 @@ addresses, trace IDs, or raw provider errors.
 The Compose database uses a private network, a named `postgres-data` volume,
 and clearly synthetic local-only credentials. History survives a RouteForge
 container restart. `docker compose down -v` deliberately deletes it along with
-the other local observability volumes. Phase 7A provides no request-history
-HTTP API.
+the other local observability volumes. The optional read-only API below exposes
+this operational metadata on a separate local listener.
 
 One background writer consumes a queue of at most 256 completed requests.
 Submission never waits for database I/O; full queues drop the new record.
@@ -586,6 +653,118 @@ key, with cascading child deletion. Embedded migrations and their version
 record commit under one transaction-scoped advisory lock. Unknown schema
 versions fail startup. Use authenticated TLS for remote database connections;
 the Compose TLS exception applies only to its private local demo network.
+
+## Read-only operational history API
+
+The control-plane listener is **disabled by default**. Enable it only alongside
+PostgreSQL persistence with `ROUTEFORGE_ADMIN_ENABLED=true`; its default address
+is `ROUTEFORGE_ADMIN_ADDR=127.0.0.1:8081`. Compose enables it with host publication
+restricted to `127.0.0.1:8081`. The inference listener is unchanged.
+
+There is **no authentication or CORS support**. Do not expose this listener to a
+remote/shared network. Responses contain operational metadata only: prompts,
+responses, credentials, user information, Redis keys, and cached content are
+never available. Responses use `Cache-Control: no-store`. This is the future
+backend for the local read-only RouteForge Console described below.
+
+- `GET /admin/v1/health`: listener liveness, not a database connectivity probe.
+- `GET /admin/v1/requests`: summaries in `started_at DESC, request_id DESC` order.
+- `GET /admin/v1/requests/{request_id}`: one summary plus `attempts`, ordered by
+  ascending attempt number. Unavailable TTFC, usage and cost remain JSON `null`.
+  Cache hits can correctly have `attempt_count: 0` and `attempts: []`.
+
+```sh
+curl 'http://127.0.0.1:8081/admin/v1/requests?limit=2&provider=mock'
+```
+
+Lists return `{"requests": [...], "next_cursor": "..."}`; `next_cursor` is
+`null` on the last page. The default limit is 50, maximum 100. Pass the returned
+opaque `cursor` with the same filters for the next page. It encodes only the
+last timestamp/ID tuple, never SQL. Pagination uses keysets, not OFFSET; it is
+a live view rather than a snapshot across pages, so later inserts/backfills
+can change subsequent pages.
+
+Supported filters (combined with AND):
+
+| Filter | Accepted values / semantics |
+| --- | --- |
+| `provider` | `mock`, `openai`, `anthropic`; matches **initial or final** provider, not every intermediate attempt |
+| `routing_policy` | `deterministic`, `latency`, `cost`, `cost_latency` |
+| `outcome` | `success`, `timeout`, `unavailable`, `rate_limited`, `invalid_request`, `cancellation`, `internal`, `other_failure` |
+| `streaming`, `cache_hit` | `true` or `false` |
+| `started_after`, `started_before` | RFC3339 timestamps with at most microsecond precision; exclusive lower/upper bounds |
+
+Unknown/duplicate parameters, malformed IDs/cursors, and invalid limits/filters
+return 400. Unknown valid IDs return 404; database failures return a sanitized
+503. Only GET is supported. Reads have a two-second deadline and do not affect
+routing. Detail reads cap attempts at 100 and fail rather than silently truncate
+an oversized chain (current providers cannot approach this bound).
+
+Migration 0003 replaces the timestamp-only index with `(started_at DESC,
+request_id DESC)` for stable pagination. No speculative per-filter indexes or
+content columns are added. Request/attempt detail reads share a read-only
+transaction snapshot. History remains asynchronously recorded and best-effort,
+so a just-finished inference request may not appear immediately.
+
+The existing Compose CI also verifies list/detail against PostgreSQL, pagination,
+cache-hit zero-attempt history, error statuses, and the metadata-only response
+contract through `scripts/verify-history-api.sh`.
+
+## Local RouteForge Console
+
+Start `docker compose up --build -d`, run `./scripts/generate-demo-traffic.sh`,
+then open **http://127.0.0.1:3001**. The console inspects real PostgreSQL-backed
+request history; Grafana at port 3000 remains the infrastructure/time-series
+dashboard. There are no fabricated records or write/routing controls.
+
+The request table exposes metadata, outcomes, duration, provider selection,
+attempt/fallback counts, and cache-hit status. Apply the history API's provider,
+policy, outcome, streaming, cache-hit, and exclusive timestamp filters; their
+state is kept in the URL. Timestamp inputs accept RFC3339 with a timezone, up to
+microsecond precision. “Load more” requests one 50-row server-cursor page at a
+time. No automatic full-history download or offset pagination occurs. Refresh
+starts a new view; there is no background polling.
+
+Open `/requests/{request_id}` to inspect the ordered actual attempt chain.
+Unavailable values display as `—`, not zero. Cache hits may have no upstream
+attempts; cached fallback responses retain earlier real attempts. TTFC is kept
+separate from full duration, and cost is estimated configured USD, not billing.
+Integers outside JavaScript's exact display range are labeled explicitly rather
+than presented as accurate rounded counts/costs.
+
+`web/` uses pinned React 19.3.0, TypeScript 7.0.2, Vite 8.3.0, a small typed fetch
+layer, and npm's checked-in lockfile. The multi-stage container builds with
+Node 24.21.0 and serves static assets through non-root Nginx 1.30.4—not Vite's
+development server. Same-origin `/api/requests` paths proxy internally to
+`routeforge:8081/admin/v1/requests`, including query strings and detail IDs.
+The proxy resolves service DNS again after container replacement and forwards
+neither browser credentials nor request bodies. Its host port binds loopback
+only; no CORS or authentication has been added. **Do not expose this stack to
+remote/shared networks.**
+
+No localStorage, analytics, remote scripts/fonts, response content, or cache
+contents are used. The console retains loaded metadata only in page memory;
+responses are marked no-store and the proxy has no access log. History is
+best-effort and asynchronously written, so a just-finished request can be absent.
+Pagination is a live view, not a multi-page snapshot.
+
+For development, enable the local admin listener and use Node 24.21.0:
+
+```sh
+cd web
+npm ci
+npm run dev
+# In another terminal, from web/:
+npm run typecheck
+npm test
+npm run build
+```
+
+The Vite development server binds loopback and proxies to the local admin API
+on port 8081. Fast CI installs from the lockfile, typechecks, tests mocked API
+boundaries, and builds. Compose CI verifies built assets, detail deep-links,
+read-only proxy behavior, and real persisted cache-hit history. No new workflow
+or browser automation service is required.
 
 ## Usage and estimated cost accounting
 

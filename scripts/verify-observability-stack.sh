@@ -224,5 +224,6 @@ echo "Grafana datasource is provisioned and can query Prometheus"
 
 ./scripts/verify-response-cache.sh
 ./scripts/verify-history-api.sh
+./scripts/verify-console.sh
 
 echo "RouteForge observability stack smoke verification passed."

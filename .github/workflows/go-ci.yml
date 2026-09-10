@@ -13,7 +13,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
@@ -49,13 +49,26 @@ jobs:
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.21.0'
+
+      - name: Check console
+        working-directory: web
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+
       - name: Check whitespace
         run: git diff --check
 
       - name: Check clean working tree
         run: |
           if [ -n "$(git status --porcelain)" ]; then
-            echo "Go checks changed the working tree:"
+            echo "Checks changed the working tree:"
             git status --short
             exit 1
           fi

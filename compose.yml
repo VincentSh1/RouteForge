@@ -1,4 +1,26 @@
 services:
+  console:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - 127.0.0.1:3001:8080
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    depends_on:
+      routeforge:
+        condition: service_healthy
+
   redis:
     image: redis:8.2.9-alpine3.22
     command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
