@@ -23,3 +23,19 @@ curl --fail --silent --show-error --max-time 5 "$console_url/requests/$id" | gre
 test "$(curl --silent --max-time 5 -X POST -o /dev/null -w '%{http_code}' "$console_url/api/requests")" = 405
 test "$(curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "$console_url/api/unsupported")" = 404
 echo "Console assets, detail deep-link, read-only proxy, and real cache-hit history verified"
+
+state="$(curl --fail --silent --show-error --max-time 5 "$console_url/api/overview")"
+printf '%s' "$state" | jq -e '
+  .routing.policy == "deterministic" and .routing.provider_order == ["mock"] and
+  .features.cache and .features.persistence and .features.metrics and (.features.tracing | not) and
+  (.providers | length) == 1 and .providers[0].provider == "mock" and
+  .providers[0].circuit_state == "closed" and .providers[0].eligible and
+  .providers[0].complete_price_models == 1
+' >/dev/null
+curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8081/admin/v1/overview |
+  jq -e '.providers[0].provider == "mock"' >/dev/null
+for page in overview providers; do
+  curl --fail --silent --show-error --max-time 5 "$console_url/$page" | grep -q 'RouteForge Console'
+done
+test "$(curl --silent --max-time 5 -X POST -o /dev/null -w '%{http_code}' "$console_url/api/overview")" = 405
+echo "Current provider/routing state and console operations routes verified"
