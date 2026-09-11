@@ -111,3 +111,59 @@ export const historyAPI = {
   detail: (id: string, signal: AbortSignal) =>
     read('/api/requests/' + encodeURIComponent(id), signal, detail),
 };
+
+export interface LatencyState {
+  stored_samples: number;
+  fresh_samples: number;
+  sufficient: boolean;
+  median_us: number | null;
+}
+export interface ProviderState {
+  provider: string;
+  circuit_state: 'closed' | 'open' | 'half_open';
+  open_until: string | null;
+  eligible: boolean;
+  probe_in_flight: boolean;
+  last_success: string | null;
+  last_failure: string | null;
+  completion: LatencyState;
+  ttfc: LatencyState;
+  priced_models: number;
+  complete_price_models: number;
+}
+export interface Overview {
+  observed_at: string;
+  features: { cache: boolean; persistence: boolean; metrics: boolean; tracing: boolean };
+  routing: {
+    policy: string;
+    auto: boolean;
+    provider_order: string[];
+    latency_aware: boolean;
+    min_samples: number;
+    sample_max_age_us: number;
+    exploration_interval: number;
+    exploration_counts: [number, number] | null;
+    max_latency_over_fastest_percent: number | null;
+  };
+  providers: ProviderState[];
+}
+function latencyState(value: unknown): value is LatencyState {
+  return object(value) && integer(value.stored_samples) && integer(value.fresh_samples) && typeof value.sufficient === 'boolean' && (value.median_us === null || integer(value.median_us));
+}
+function overview(value: unknown): value is Overview {
+  if (!object(value) || !text(value.observed_at) || !object(value.features) || !object(value.routing) || !Array.isArray(value.providers)) return false;
+  const features = value.features, routing = value.routing;
+  return ['cache', 'persistence', 'metrics', 'tracing'].every(key => typeof features[key] === 'boolean') &&
+    text(routing.policy) && typeof routing.auto === 'boolean' && typeof routing.latency_aware === 'boolean' &&
+    Array.isArray(routing.provider_order) && routing.provider_order.every(text) &&
+    ['min_samples', 'sample_max_age_us', 'exploration_interval'].every(key => integer(routing[key])) &&
+    (routing.exploration_counts === null || Array.isArray(routing.exploration_counts) && routing.exploration_counts.length === 2 && routing.exploration_counts.every(integer)) &&
+    (routing.max_latency_over_fastest_percent === null || integer(routing.max_latency_over_fastest_percent)) &&
+    value.providers.every((p: unknown) => object(p) && text(p.provider) && ['closed', 'open', 'half_open'].includes(String(p.circuit_state)) &&
+      ['open_until', 'last_success', 'last_failure'].every(key => p[key] === null || text(p[key])) &&
+      typeof p.eligible === 'boolean' && typeof p.probe_in_flight === 'boolean' && latencyState(p.completion) && latencyState(p.ttfc) &&
+      integer(p.priced_models) && integer(p.complete_price_models));
+}
+export const operationsAPI = {
+  overview: (signal: AbortSignal) => read('/api/overview', signal, overview),
+};

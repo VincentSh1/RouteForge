@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { APIError, filterKeys, filterOptions, historyAPI } from './api';
 import type { RequestSummary, RequestDetail } from './api';
 import { cost, duration, timestamp, tokens } from './format';
+import { Operations } from './Operations';
 
 function subscribe(callback: () => void) {
   window.addEventListener('popstate', callback);
@@ -142,7 +143,8 @@ export function App() {
   const url = new URL(location, window.location.origin);
   const match = /^\/requests\/(rfreq_[A-Za-z0-9_-]{22})$/.exec(url.pathname);
   return <div className="app"><header><a className="brand" href="/"><span className="brand-mark">RF</span>RouteForge <span className="muted">/ Console</span></a><span className="local"><span />LOCAL · READ ONLY</span></header>
-    <main>{url.pathname === '/' ? <History key={location} search={url.search} /> : match ? <Detail key={match[1]} id={match[1]} search={url.search} /> : <div className="notice"><h1>Page not found</h1><a href="/">Return to request history</a></div>}</main>
+    <nav aria-label="Console navigation">{[['/overview', 'Overview'], ['/providers', 'Providers'], ['/', 'Requests']].map(([href, label]) => <a key={href} href={href} aria-current={(url.pathname === href || href === '/' && match) ? 'page' : undefined}>{label}</a>)}</nav>
+    <main>{url.pathname === '/overview' ? <Operations /> : url.pathname === '/providers' ? <Operations providersOnly /> : url.pathname === '/' ? <History key={location} search={url.search} /> : match ? <Detail key={match[1]} id={match[1]} search={url.search} /> : <div className="notice"><h1>Page not found</h1><a href="/">Return to request history</a></div>}</main>
     <footer>Operational metadata only · No prompts or responses · Infrastructure trends remain in Grafana</footer>
   </div>;
 }
