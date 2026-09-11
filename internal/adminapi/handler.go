@@ -11,8 +11,11 @@ import (
 	"github.com/VincentSh1/RouteForge/internal/persistence"
 )
 
-func NewServer(addr string, reader persistence.Reader) *http.Server {
-	return &http.Server{Addr: addr, Handler: NewHandler(reader), ReadHeaderTimeout: 5 * time.Second,
+func NewServer(addr string, reader persistence.Reader, snapshot func() Overview) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("/admin/v1/overview", operationsHandler(snapshot))
+	mux.Handle("/", NewHandler(reader))
+	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
 }
 
