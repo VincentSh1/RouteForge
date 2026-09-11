@@ -170,7 +170,7 @@ func TestDetailPreservesAvailableZeroAndIntegerValues(t *testing.T) {
 }
 
 func TestAdminServerIsIsolatedAndBounded(t *testing.T) {
-	server := NewServer("127.0.0.1:8081", nil)
+	server := NewServer("127.0.0.1:8081", nil, nil)
 	if server.ReadHeaderTimeout <= 0 || server.WriteTimeout <= persistence.QueryTimeout || server.MaxHeaderBytes > 8192 {
 		t.Fatal("unbounded admin server")
 	}
