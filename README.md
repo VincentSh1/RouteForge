@@ -469,7 +469,10 @@ RouteForge, Redis, PostgreSQL, Prometheus, and Grafana demo. Docker with Compose
 the only runtime prerequisite; the traffic script runs its HTTP client inside
 the RouteForge container.
 
-Start the stack from the repository root:
+Set `ROUTEFORGE_ADMIN_SECRET` to a generated 32–256-byte secret from your
+password manager, using your environment or an ignored `.env` file. Use that
+same value at the Console Login screen. No admin credential is checked in.
+Then start the stack from the repository root:
 
 ```sh
 docker compose up --build -d
@@ -661,8 +664,9 @@ PostgreSQL persistence with `ROUTEFORGE_ADMIN_ENABLED=true`; its default address
 is `ROUTEFORGE_ADMIN_ADDR=127.0.0.1:8081`. Compose enables it with host publication
 restricted to `127.0.0.1:8081`. The inference listener is unchanged.
 
-There is **no authentication or CORS support**. Do not expose this listener to a
-remote/shared network. Responses contain operational metadata only: prompts,
+Admin session authentication is optional outside Compose and enabled in Compose;
+see the authentication section below. There is no CORS support. Do not expose
+this listener to a remote/shared network. Responses contain operational metadata only: prompts,
 responses, credentials, user information, Redis keys, and cached content are
 never available. Responses use `Cache-Control: no-store`. This is the future
 backend for the local read-only RouteForge Console described below.
@@ -713,7 +717,8 @@ contract through `scripts/verify-history-api.sh`.
 ## Local RouteForge Console
 
 Start `docker compose up --build -d`, run `./scripts/generate-demo-traffic.sh`,
-then open **http://127.0.0.1:3001**. The console inspects real PostgreSQL-backed
+then open **http://127.0.0.1:3001** and log in with the configured admin secret.
+The console inspects real PostgreSQL-backed
 request history; Grafana at port 3000 remains the infrastructure/time-series
 dashboard. There are no fabricated records or write/routing controls.
 
@@ -737,9 +742,11 @@ layer, and npm's checked-in lockfile. The multi-stage container builds with
 Node 24.21.0 and serves static assets through non-root Nginx 1.30.4—not Vite's
 development server. Same-origin `/api/requests` paths proxy internally to
 `routeforge:8081/admin/v1/requests`, including query strings and detail IDs.
-The proxy resolves service DNS again after container replacement and forwards
-neither browser credentials nor request bodies. Its host port binds loopback
-only; no CORS or authentication has been added. **Do not expose this stack to
+The proxy resolves service DNS again after container replacement. Read-only API
+routes forward the session cookie but no request bodies. Only authentication
+routes forward bounded JSON bodies, Content-Type, and Origin/Fetch Metadata
+headers. Authorization headers are never forwarded. Its host port binds loopback
+only, with no CORS support. **Do not expose this stack to
 remote/shared networks.**
 
 No localStorage, analytics, remote scripts/fonts, response content, or cache
@@ -765,6 +772,146 @@ on port 8081. Fast CI installs from the lockfile, typechecks, tests mocked API
 boundaries, and builds. Compose CI verifies built assets, detail deep-links,
 read-only proxy behavior, and real persisted cache-hit history. No new workflow
 or browser automation service is required.
+
+## Current provider and routing operations
+
+The console's **Overview** (`/overview`) and **Providers** (`/providers`) pages
+read `GET /admin/v1/overview` through the same-origin `/api/overview` proxy.
+Requests remain at `/`, with their existing filters, pagination and detail pages.
+The new endpoint uses the existing default-off, loopback admin listener and
+requires no additional configuration. No new database queries or migrations
+are involved. Feature flags mean configured enablement, not dependency health.
+
+The response contains `observed_at`, `features`, `routing`, and `providers`:
+
+- Actual active policy and auto/explicit selection mode; configured provider
+  order, not a freshly computed routing order.
+- Authoritative circuit state, advisory eligibility, probe-in-flight flag,
+  OPEN deadline, and already-tracked telemetry success/failure timestamps.
+- Per-mode retained/fresh sample counts, sample sufficiency, and fresh rolling
+  medians in microseconds. Below the minimum sample count, medians are `null`.
+  Completion samples include terminal failures; TTFC requires actual content.
+- Pricing coverage counts: model entries with at least one configured rate and
+  entries with both rates. Zero-valued configured rates still count. This is
+  not a claim that arbitrary native models have pricing; no prices/model tables
+  are exposed.
+- Sample thresholds/age, exploration interval, and sync/stream warm-up counter
+  positions. Counters are `null` when no latency-aware policy is active; dormant
+  sample settings are still shown for other policies. Cost-latency tolerance is
+  present only when that policy is active.
+
+Inspection only copies state under existing locks. It never calls routing order,
+exploration advancement, circuit admission, model resolution, or provider APIs.
+An OPEN circuit past its cooldown remains OPEN until an actual attempt claims
+the probe; it may already be eligible. HALF_OPEN with an in-flight probe is not
+eligible. Latest failure timestamps use provider telemetry's outcome semantics,
+not just circuit-counted failures. Components are sampled independently, not in
+one global atomic transaction; admission can change immediately afterward.
+
+Refresh is manual. These are process-local snapshots that reset on restart,
+not historical charts or health guarantees. Grafana retains its time-series
+role. There are no configuration controls, secrets/connection URLs, content,
+or CORS additions; admin authentication applies to these views too. The local-only security restrictions above
+still apply. Existing Compose smoke verification checks the direct endpoint,
+same-origin proxy, and both console routes alongside the history/cache checks.
+
+## Offline benchmark comparisons in the Console
+
+Open **Benchmarks** at `http://127.0.0.1:3001/benchmarks` to compare
+`deterministic`, `latency`, `cost`, and `cost_latency` against the built-in
+`stable`, `degradation`, `rate_limit`, `streaming`, and `cold_start` fixtures.
+These are controlled synthetic experiments, not production traffic, real
+provider performance, or semantic-quality measurements. Grafana remains the
+historical infrastructure dashboard.
+
+The existing local admin listener provides:
+
+- `GET /admin/v1/benchmarks`: built-in identifiers, version, mode, measured
+  request count, and explicit warm-up sequence length.
+- `GET /admin/v1/benchmarks/{scenario}?state=warm|cold`: the unchanged benchmark
+  comparison JSON for all four policies. State defaults to `warm`.
+
+Only known embedded fixtures and these two initial states are accepted; no
+file paths, uploads, URLs, commands, or custom policies can be supplied. The
+same-origin console proxy uses `/api/benchmarks`. Existing local-only admin
+access restrictions and session authentication apply; there is no CORS addition.
+
+Warm runs replay each fixture's explicit warm-up separately from measured
+requests; cold runs start empty. Both reuse `internal/benchmark` with a fresh
+virtual-clock gateway per policy. Live routing, circuits, telemetry, cache,
+accounting, and PostgreSQL history are not inputs or outputs. Up to ten reports
+(five fixtures × two states) are computed lazily once per admin server and
+retained as immutable JSON in bounded process memory, not persisted. A fixture
+execution failure is sanitized and retained until restart. The CLI is unchanged.
+
+Tables compare success, nearest-rank p50/p95 completion latency or streaming
+TTFC, estimated configured cost and cost per successful request, average
+attempts/additional fallback attempts, fallback frequency, initial selections,
+and switches. Missing values remain unavailable, not zero. Completion includes
+failed requests and fallback time; TTFC includes only streams reaching content,
+even if they later fail. Cost includes available estimates for all attempts and
+can undercount unavailable estimates; it is not invoice cost or money saved.
+No weighted score, quality metric, live-provider execution, or editing controls
+are introduced. Existing Go/frontend CI and Compose smoke checks cover this
+view and verify deterministic results without changing live state.
+
+## Control-plane authentication
+
+The inference API remains unauthenticated. The admin server can require a
+single-admin session for **all** history, operations, benchmark, health, and
+unknown endpoints. The console checks session status before mounting any
+protected view, clears those views on an API 401, and provides Login/Logout.
+Static HTML/JS remain public so the Login screen can load; no operational data
+is embedded in those assets.
+
+Configuration:
+
+- `ROUTEFORGE_ADMIN_AUTH_ENABLED`: default `false`; Compose sets `true`.
+- `ROUTEFORGE_ADMIN_SECRET`: required when enabled, 32–256 bytes without
+  surrounding whitespace. Use a randomly generated high-entropy secret, not
+  a human password. Keep it in environment/config, never source control or logs.
+- `ROUTEFORGE_ADMIN_SESSION_TTL`: default `8h`, whole seconds from `1m` to `24h`.
+- `ROUTEFORGE_ADMIN_ORIGIN`: exact browser origin, default
+  `http://127.0.0.1:3001`. For Vite use `http://127.0.0.1:5173`. No path, query,
+  credentials, or wildcard is accepted. HTTP is allowed only for loopback;
+  remote origins require HTTPS.
+
+The same-origin `/api/auth/session` (GET), `/api/auth/login` (POST), and
+`/api/auth/logout` (POST) proxy to `/admin/v1/auth/*`. Login accepts only a
+small JSON `{ "secret": "..." }` object; logout accepts an empty JSON object.
+POSTs require the exact configured Origin, JSON Content-Type, and no cross-site
+Fetch Metadata. Missing Origin is rejected, including from command-line clients.
+There is no CORS or arbitrary redirect support. Session status exposes only
+enabled/authenticated booleans; session identifiers are never returned in JSON.
+
+Credentials are compared via constant-time fixed-length SHA-256 digests. Random
+256-bit session IDs are issued in a host-only, Path=/, HttpOnly, SameSite=Strict
+cookie; only their hashes and absolute expiry are retained on the server.
+Cookies are Secure when the configured browser origin is HTTPS; the explicit
+local HTTP demo cannot use Secure cookies. Browser JavaScript never stores
+secrets or session IDs in localStorage/sessionStorage. Cookies are host-scoped,
+not port-scoped: use a dedicated trusted hostname for any future remote setup.
+
+At most 128 sessions exist per process. Expired entries are pruned during
+authentication activity; no worker or database is used. The TTL is absolute,
+not sliding. Login rotates an existing session; logout deletes it. Restart or
+secret reconfiguration invalidates all sessions. Already-admitted requests can
+finish during concurrent logout. A global limit of 20 login attempts per minute
+bounds guessing without storing client identities; exhaustion can temporarily
+deny login even to the legitimate operator. This is not an internet-facing
+abuse-prevention system.
+
+Compose requires the secret explicitly (no hardcoded fallback), keeps all host
+ports on loopback, and CI generates a disposable secret without printing it.
+The existing smoke checks authenticate using temporary private cookie files,
+verify anonymous rejection, Origin enforcement, login, protected views, logout,
+and re-login, then remove the cookie files. For manual smoke execution, export
+the same secret used by Compose; no provider keys are needed.
+
+TLS, trusted reverse-proxy/network boundaries, and further operational hardening
+are still required for remote/shared use. This does not secure the separate
+inference, Grafana, or Prometheus interfaces. No users, roles, OAuth, signup,
+password reset, or configuration controls are introduced.
 
 ## Usage and estimated cost accounting
 
@@ -974,8 +1121,9 @@ go run ./cmd/routeforge
 Do not commit keys or `.env` files. Automated tests use local fake upstream
 servers and never make paid API calls.
 
-RouteForge has no authentication or rate limiting. Do not expose it
-to public or untrusted networks. A deployment must explicitly configure
+RouteForge's inference API has no authentication or rate limiting. Admin
+authentication does not make the stack safe for public or untrusted networks.
+A deployment must explicitly configure
 `ROUTEFORGE_ADDR` to listen on a non-loopback interface.
 
 ## Test
