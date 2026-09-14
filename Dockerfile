@@ -9,6 +9,7 @@ RUN go mod download
 
 COPY cmd ./cmd
 COPY internal ./internal
+COPY benchmarks ./benchmarks
 
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -buildvcs=false \

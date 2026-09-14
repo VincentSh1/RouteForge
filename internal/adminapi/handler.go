@@ -8,11 +8,15 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/VincentSh1/RouteForge/internal/benchmark"
 	"github.com/VincentSh1/RouteForge/internal/persistence"
 )
 
 func NewServer(addr string, reader persistence.Reader, snapshot func() Overview) *http.Server {
 	mux := http.NewServeMux()
+	benchmarks := newBenchmarkHandler(benchmark.BuiltInScenario)
+	mux.Handle("/admin/v1/benchmarks", benchmarks)
+	mux.Handle("/admin/v1/benchmarks/{scenario}", benchmarks)
 	mux.Handle("/admin/v1/overview", operationsHandler(snapshot))
 	mux.Handle("/", NewHandler(reader))
 	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
