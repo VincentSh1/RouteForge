@@ -101,11 +101,13 @@ func run() error {
 		servers = append(servers, httpapi.NewMetricsServer(cfg, metricsMux))
 	}
 	if cfg.AdminEnabled {
-		servers = append(servers, adminapi.NewServer(cfg.AdminAddr, historyReader, func() adminapi.Overview {
+		adminServer := adminapi.NewServer(cfg.AdminAddr, historyReader, func() adminapi.Overview {
 			return adminapi.Overview{OperationsSnapshot: service.OperationsSnapshot(gateway.RoutingConfig{
 				MinSamples: cfg.RoutingMinSamples, SampleMaxAge: cfg.RoutingSampleMaxAge, ExplorationInterval: cfg.RoutingExplorationInterval,
 			}), Features: adminapi.Features{Cache: cfg.CacheEnabled, Persistence: cfg.PostgresEnabled, Metrics: cfg.MetricsEnabled, Tracing: cfg.OTelEnabled}}
-		}))
+		})
+		adminServer.Handler = adminapi.Authenticate(adminServer.Handler, adminapi.AuthConfig{Enabled: cfg.AdminAuthEnabled, Secret: cfg.AdminSecret, TTL: cfg.AdminSessionTTL, Origin: cfg.AdminOrigin})
+		servers = append(servers, adminServer)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

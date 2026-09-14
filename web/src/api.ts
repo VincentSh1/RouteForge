@@ -90,7 +90,8 @@ async function read<T>(path: string, signal: AbortSignal, valid: (value: unknown
   if (signal.aborted) abort();
   const timer = setTimeout(abort, 10000);
   try {
-    const response = await fetch(path, { signal: controller.signal, cache: 'no-store', credentials: 'omit' });
+    const response = await fetch(path, { signal: controller.signal, cache: 'no-store', credentials: 'same-origin' });
+    if (response.status === 401 && !controller.signal.aborted) window.dispatchEvent(new Event('routeforge-session-expired'));
     if (!response.ok) throw new APIError(response.status);
     const value: unknown = await response.json();
     if (!valid(value)) throw new APIError(0);

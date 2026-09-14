@@ -98,6 +98,6 @@ it('validates fetched reports and constructs only same-origin GET queries', asyn
   const signal = new AbortController().signal;
   expect(await benchmarkAPI.scenarios(signal)).toEqual({ scenarios });
   expect(await benchmarkAPI.compare('stable', 'cold', signal)).toEqual(result);
-  expect(fetcher).toHaveBeenCalledWith('/api/benchmarks/stable?state=cold', expect.objectContaining({ credentials: 'omit', cache: 'no-store' }));
+  expect(fetcher).toHaveBeenCalledWith('/api/benchmarks/stable?state=cold', expect.objectContaining({ credentials: 'same-origin', cache: 'no-store' }));
   await expect(benchmarkAPI.compare('stable', 'warm', signal)).rejects.toBeInstanceOf(APIError);
 });

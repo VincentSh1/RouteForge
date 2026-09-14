@@ -1,30 +1,41 @@
 #!/bin/sh
 # Exercise the built console and same-origin proxy, never print record bodies.
 set -eu
+. ./scripts/admin-session.sh
 console_url=http://127.0.0.1:3001
 ready=false
 for attempt in $(seq 1 60); do
-  if curl --fail --silent --max-time 3 "$console_url/health" >/dev/null; then ready=true; break; fi
+  if command curl --fail --silent --max-time 3 "$console_url/health" >/dev/null; then ready=true; break; fi
   sleep 1
 done
 test "$ready" = true
-html="$(curl --fail --silent --show-error --max-time 5 "$console_url/")"
+
+for path in requests overview benchmarks; do
+  test "$(command curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "$console_url/api/$path")" = 401
+  test "$(command curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8081/admin/v1/$path")" = 401
+done
+test "$(command curl --silent --max-time 5 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data '{}' "$console_url/api/auth/login")" = 403
+test "$(command curl --silent --max-time 5 -o /dev/null -w '%{http_code}' -H 'Origin: http://127.0.0.1:3001' -H 'Content-Type: application/json' --data '{"secret":"invalid"}' "$console_url/api/auth/login")" = 401
+auth_init 'http://127.0.0.1:3001/api'
+grep -q '^#HttpOnly_' "$auth_cookie_jar"
+auth_curl --fail --silent --max-time 5 "$console_url/api/auth/session" | jq -e '.enabled and .authenticated' >/dev/null
+html="$(auth_curl --fail --silent --show-error --max-time 5 "$console_url/")"
 printf '%s' "$html" | grep -q 'RouteForge Console'
 asset="$(printf '%s' "$html" | sed -n 's/.*src="\(\/assets\/[^"]*\.js\)".*/\1/p')"
 test -n "$asset"
-curl --fail --silent --show-error --max-time 5 "$console_url$asset" >/dev/null
-page="$(curl --fail --silent --show-error --max-time 5 "$console_url/api/requests?limit=2&cache_hit=true")"
+auth_curl --fail --silent --show-error --max-time 5 "$console_url$asset" >/dev/null
+page="$(auth_curl --fail --silent --show-error --max-time 5 "$console_url/api/requests?limit=2&cache_hit=true")"
 printf '%s' "$page" | jq -e '(.requests | length) > 0 and all(.requests[]; .cache_hit)' >/dev/null
 id="$(printf '%s' "$page" | jq -er '.requests[0].request_id')"
-detail="$(curl --fail --silent --show-error --max-time 5 "$console_url/api/requests/$id")"
-direct="$(curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:8081/admin/v1/requests/$id")"
+detail="$(auth_curl --fail --silent --show-error --max-time 5 "$console_url/api/requests/$id")"
+direct="$(auth_curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:8081/admin/v1/requests/$id")"
 printf '%s' "$detail" | jq -e --argjson direct "$direct" '. == $direct and .cache_hit and .attempt_count == 0 and .attempts == []' >/dev/null
-curl --fail --silent --show-error --max-time 5 "$console_url/requests/$id" | grep -q 'RouteForge Console'
-test "$(curl --silent --max-time 5 -X POST -o /dev/null -w '%{http_code}' "$console_url/api/requests")" = 405
-test "$(curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "$console_url/api/unsupported")" = 404
+auth_curl --fail --silent --show-error --max-time 5 "$console_url/requests/$id" | grep -q 'RouteForge Console'
+test "$(auth_curl --silent --max-time 5 -X POST -o /dev/null -w '%{http_code}' "$console_url/api/requests")" = 405
+test "$(auth_curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "$console_url/api/unsupported")" = 404
 echo "Console assets, detail deep-link, read-only proxy, and real cache-hit history verified"
 
-state="$(curl --fail --silent --show-error --max-time 5 "$console_url/api/overview")"
+state="$(auth_curl --fail --silent --show-error --max-time 5 "$console_url/api/overview")"
 printf '%s' "$state" | jq -e '
   .routing.policy == "deterministic" and .routing.provider_order == ["mock"] and
   .features.cache and .features.persistence and .features.metrics and (.features.tracing | not) and
@@ -32,10 +43,41 @@ printf '%s' "$state" | jq -e '
   .providers[0].circuit_state == "closed" and .providers[0].eligible and
   .providers[0].complete_price_models == 1
 ' >/dev/null
-curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8081/admin/v1/overview |
+auth_curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8081/admin/v1/overview |
   jq -e '.providers[0].provider == "mock"' >/dev/null
 for page in overview providers; do
-  curl --fail --silent --show-error --max-time 5 "$console_url/$page" | grep -q 'RouteForge Console'
+  auth_curl --fail --silent --show-error --max-time 5 "$console_url/$page" | grep -q 'RouteForge Console'
 done
-test "$(curl --silent --max-time 5 -X POST -o /dev/null -w '%{http_code}' "$console_url/api/overview")" = 405
+test "$(auth_curl --silent --max-time 5 -X POST -o /dev/null -w '%{http_code}' "$console_url/api/overview")" = 405
 echo "Current provider/routing state and console operations routes verified"
+
+catalog="$(auth_curl --fail --silent --show-error --max-time 5 "$console_url/api/benchmarks")"
+printf '%s' "$catalog" | jq -e '[.scenarios[].id] == ["stable", "degradation", "rate_limit", "streaming", "cold_start"]' >/dev/null
+before="$(auth_curl --fail --silent --show-error --max-time 5 "$console_url/api/overview" | jq -c 'del(.observed_at)')"
+for scenario in stable degradation rate_limit streaming cold_start; do
+  for state in warm cold; do
+    report="$(auth_curl --fail --silent --show-error --max-time 5 "$console_url/api/benchmarks/$scenario?state=$state")"
+    printf '%s' "$report" | jq -e --arg scenario "$scenario" --arg state "$state" '
+      .scenario == $scenario and .state == $state and .scenario_version == 1 and
+      [.results[].policy] == ["deterministic", "latency", "cost", "cost_latency"] and
+      all(.results[]; .requests > 0 and .estimated_cost_micro_usd > 0) and
+      (if $scenario == "streaming" then all(.results[]; has("p50_ttfc_ms") and (has("p50_latency_ms") | not))
+       else all(.results[]; has("p50_latency_ms") and (has("p50_ttfc_ms") | not)) end)
+    ' >/dev/null
+    repeat="$(auth_curl --fail --silent --show-error --max-time 5 "$console_url/api/benchmarks/$scenario?state=$state")"
+    test "$report" = "$repeat"
+  done
+done
+after="$(auth_curl --fail --silent --show-error --max-time 5 "$console_url/api/overview" | jq -c 'del(.observed_at)')"
+test "$before" = "$after"
+auth_curl --fail --silent --show-error --max-time 5 "$console_url/benchmarks" | grep -q 'RouteForge Console'
+test "$(auth_curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "$console_url/api/benchmarks/unknown")" = 400
+test "$(auth_curl --silent --max-time 5 -X POST -o /dev/null -w '%{http_code}' "$console_url/api/benchmarks/stable")" = 405
+echo "Built-in benchmark comparisons, reproducibility, isolation, and console proxy verified"
+
+auth_curl --fail --silent --max-time 5 -H 'Origin: http://127.0.0.1:3001' -H 'Content-Type: application/json' \
+  --data '{}' "$console_url/api/auth/logout" | jq -e '.authenticated == false' >/dev/null
+test "$(auth_curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "$console_url/api/overview")" = 401
+auth_login
+auth_curl --fail --silent --max-time 5 "$console_url/api/overview" >/dev/null
+echo "Admin authentication, Origin protection, session cookie, logout, and re-login verified"

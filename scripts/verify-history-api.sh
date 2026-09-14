@@ -1,10 +1,12 @@
 #!/bin/sh
 # Read-only checks against the mock Compose stack; do not print history bodies.
 set -eu
+. ./scripts/admin-session.sh
+auth_init 'http://127.0.0.1:8081/admin/v1'
 admin_url=http://127.0.0.1:8081/admin/v1
 
 get() {
-  curl --fail --silent --show-error --max-time 5 "$@"
+  auth_curl --fail --silent --show-error --max-time 5 "$@"
 }
 
 ready=false
@@ -74,9 +76,9 @@ printf '%s' "$cached_detail" | jq -e '
   .cache_hit and .outcome == "success" and .attempt_count == 0 and .attempts == []
 ' >/dev/null
 
-test "$(curl --silent --show-error --max-time 5 -o /dev/null -w '%{http_code}' \
+test "$(auth_curl --silent --show-error --max-time 5 -o /dev/null -w '%{http_code}' \
   "$admin_url/requests/invalid")" = 400
-test "$(curl --silent --show-error --max-time 5 -o /dev/null -w '%{http_code}' \
+test "$(auth_curl --silent --show-error --max-time 5 -o /dev/null -w '%{http_code}' \
   "$admin_url/requests/rfreq_AAAAAAAAAAAAAAAAAAAAAA")" = 404
 
 # Allowlist the complete response contract rather than searching only for a

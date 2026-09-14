@@ -138,7 +138,7 @@ describe('typed API boundary', () => {
     const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ requests: [], next_cursor: null }) });
     vi.stubGlobal('fetch', fetcher);
     await historyAPI.list('?provider=mock', undefined, new AbortController().signal);
-    expect(fetcher).toHaveBeenCalledWith('/api/requests?limit=50&provider=mock', expect.objectContaining({ credentials: 'omit', cache: 'no-store' }));
+    expect(fetcher).toHaveBeenCalledWith('/api/requests?limit=50&provider=mock', expect.objectContaining({ credentials: 'same-origin', cache: 'no-store' }));
   });
   it('does not read or expose raw error bodies', async () => {
     const json = vi.fn();

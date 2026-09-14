@@ -67,6 +67,10 @@ type Config struct {
 	DatabaseURL                         string
 	AdminEnabled                        bool
 	AdminAddr                           string
+	AdminAuthEnabled                    bool
+	AdminSecret                         string
+	AdminSessionTTL                     time.Duration
+	AdminOrigin                         string
 	CacheEnabled                        bool
 	RedisURL                            string
 	CacheTTL                            time.Duration
@@ -121,6 +125,7 @@ func Load() (Config, error) {
 		{key: "ROUTEFORGE_METRICS_ENABLED", target: &cfg.MetricsEnabled},
 		{key: "ROUTEFORGE_POSTGRES_ENABLED", target: &cfg.PostgresEnabled},
 		{key: "ROUTEFORGE_ADMIN_ENABLED", target: &cfg.AdminEnabled},
+		{key: "ROUTEFORGE_ADMIN_AUTH_ENABLED", target: &cfg.AdminAuthEnabled},
 		{key: "ROUTEFORGE_CACHE_ENABLED", target: &cfg.CacheEnabled},
 	} {
 		if raw := strings.TrimSpace(os.Getenv(value.key)); raw != "" {
@@ -130,6 +135,9 @@ func Load() (Config, error) {
 			}
 			*value.target = enabled
 		}
+	}
+	if err := loadAdminAuth(&cfg); err != nil {
+		return Config{}, err
 	}
 	var err error
 	if cfg.OpenAIPricing, err = loadPricing("OPENAI"); err != nil {

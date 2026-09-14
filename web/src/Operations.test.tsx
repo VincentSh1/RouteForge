@@ -78,6 +78,6 @@ it('validates the real API shape without credentials or state writes', async () 
   vi.stubGlobal('fetch', fetcher);
   const result = await operationsAPI.overview(new AbortController().signal);
   expect(result).toEqual(state);
-  expect(fetcher).toHaveBeenCalledWith('/api/overview', expect.objectContaining({ credentials: 'omit', cache: 'no-store' }));
+  expect(fetcher).toHaveBeenCalledWith('/api/overview', expect.objectContaining({ credentials: 'same-origin', cache: 'no-store' }));
   await expect(operationsAPI.overview(new AbortController().signal)).rejects.toBeInstanceOf(APIError);
 });

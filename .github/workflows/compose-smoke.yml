@@ -21,6 +21,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Generate disposable local admin secret
+        id: admin_secret
+        run: |
+          test ! -e .env
+          umask 077
+          printf 'ROUTEFORGE_ADMIN_SECRET=%s\n' "$(openssl rand -hex 32)" > .env
+          echo 'created=true' >> "$GITHUB_OUTPUT"
+
       - name: Validate Docker and Compose
         run: |
           docker version
@@ -54,7 +62,9 @@ jobs:
           docker compose ps
 
       - name: Verify stack end to end
-        run: ./scripts/verify-observability-stack.sh 24
+        run: |
+          export ROUTEFORGE_ADMIN_SECRET="$(sed -n 's/^ROUTEFORGE_ADMIN_SECRET=//p' .env)"
+          ./scripts/verify-observability-stack.sh 24
 
       - name: Collect failure diagnostics
         if: failure()
@@ -65,4 +75,8 @@ jobs:
 
       - name: Tear down observability stack
         if: always()
-        run: docker compose down -v --remove-orphans
+        run: |
+          if [ "${{ steps.admin_secret.outputs.created }}" = true ]; then
+            trap 'rm -f .env' EXIT
+          fi
+          docker compose down -v --remove-orphans

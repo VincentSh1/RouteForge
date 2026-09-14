@@ -64,6 +64,10 @@ services:
       ROUTEFORGE_OTEL_ENABLED: "false"
       ROUTEFORGE_POSTGRES_ENABLED: "true"
       ROUTEFORGE_ADMIN_ENABLED: "true"
+      ROUTEFORGE_ADMIN_AUTH_ENABLED: "true"
+      ROUTEFORGE_ADMIN_SECRET: ${ROUTEFORGE_ADMIN_SECRET:?Set a generated local admin secret in your environment or ignored .env file}
+      ROUTEFORGE_ADMIN_ORIGIN: http://127.0.0.1:3001
+      ROUTEFORGE_ADMIN_SESSION_TTL: 8h
       ROUTEFORGE_ADMIN_ADDR: 0.0.0.0:8081
       ROUTEFORGE_CACHE_ENABLED: "true"
       ROUTEFORGE_REDIS_URL: redis://redis:6379
