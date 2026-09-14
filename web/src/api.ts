@@ -167,3 +167,39 @@ function overview(value: unknown): value is Overview {
 export const operationsAPI = {
   overview: (signal: AbortSignal) => read('/api/overview', signal, overview),
 };
+
+export type BenchmarkState = 'warm' | 'cold';
+export interface BenchmarkScenario {
+  id: string; version: number; mode: 'non_streaming' | 'streaming'; requests: number; warmup_requests: number;
+}
+export interface BenchmarkResult {
+  policy: string; mode: 'non_streaming' | 'streaming'; requests: number; success_rate: number;
+  average_attempts_per_request: number; fallback_rate: number;
+  p50_latency_ms?: number; p95_latency_ms?: number; p50_ttfc_ms?: number; p95_ttfc_ms?: number;
+  estimated_cost_micro_usd: number; estimated_cost_per_successful_request_micro_usd?: number;
+  initial_provider_selections: Record<string, number>; provider_selection_switches: number;
+  fallback_provider_attempts: Record<string, number>;
+}
+export interface BenchmarkComparison {
+  scenario: string; scenario_version: number; state: BenchmarkState; results: BenchmarkResult[];
+}
+const benchmarkMode = (value: unknown) => value === 'non_streaming' || value === 'streaming';
+const nonnegative = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const distribution = (value: unknown) => object(value) && Object.values(value).every(integer);
+function benchmarkCatalog(value: unknown): value is { scenarios: BenchmarkScenario[] } {
+  return object(value) && Array.isArray(value.scenarios) && value.scenarios.every((s: unknown) =>
+    object(s) && text(s.id) && integer(s.version) && benchmarkMode(s.mode) && integer(s.requests) && integer(s.warmup_requests));
+}
+function benchmarkComparison(value: unknown): value is BenchmarkComparison {
+  return object(value) && text(value.scenario) && integer(value.scenario_version) && (value.state === 'warm' || value.state === 'cold') &&
+    Array.isArray(value.results) && value.results.length === 4 && value.results.every((r: unknown) => object(r) &&
+      ['deterministic', 'latency', 'cost', 'cost_latency'].includes(String(r.policy)) && benchmarkMode(r.mode) && integer(r.requests) &&
+      nonnegative(r.success_rate) && r.success_rate <= 1 && nonnegative(r.fallback_rate) && r.fallback_rate <= 1 && nonnegative(r.average_attempts_per_request) &&
+      ['p50_latency_ms', 'p95_latency_ms', 'p50_ttfc_ms', 'p95_ttfc_ms', 'estimated_cost_per_successful_request_micro_usd'].every(key => r[key] === undefined || integer(r[key])) &&
+      integer(r.estimated_cost_micro_usd) && integer(r.provider_selection_switches) && distribution(r.initial_provider_selections) && distribution(r.fallback_provider_attempts));
+}
+export const benchmarkAPI = {
+  scenarios: (signal: AbortSignal) => read('/api/benchmarks', signal, benchmarkCatalog),
+  compare: (scenario: string, state: BenchmarkState, signal: AbortSignal) =>
+    read('/api/benchmarks/' + encodeURIComponent(scenario) + '?state=' + state, signal, benchmarkComparison),
+};

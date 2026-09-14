@@ -6,6 +6,10 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     proxy: {
+      '/api/benchmarks': {
+        target: 'http://127.0.0.1:8081',
+        rewrite: (path) => path.replace(/^\/api\/benchmarks/, '/admin/v1/benchmarks'),
+      },
       '/api/overview': {
         target: 'http://127.0.0.1:8081',
         rewrite: (path) => path.replace(/^\/api\/overview/, '/admin/v1/overview'),
