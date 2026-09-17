@@ -22,7 +22,7 @@ type requestMetricState struct {
 
 type requestMetricStateKey struct{}
 
-func TraceRequests(next http.Handler, tracer trace.Tracer, propagator propagation.TextMapPropagator, routingPolicy string, metrics *observability.Metrics) http.Handler {
+func TraceRequests(next http.Handler, tracer trace.Tracer, propagator propagation.TextMapPropagator, routingPolicy string, metrics *observability.Metrics, bindRouting ...func(context.Context) (context.Context, string)) http.Handler {
 	if metrics == nil {
 		metrics = observability.NoopMetrics()
 	}
@@ -35,12 +35,16 @@ func TraceRequests(next http.Handler, tracer trace.Tracer, propagator propagatio
 		started := time.Now()
 		metricState := &requestMetricState{}
 		ctx := context.WithValue(propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header)), requestMetricStateKey{}, metricState)
+		policy := routingPolicy
+		if len(bindRouting) != 0 {
+			ctx, policy = bindRouting[0](ctx)
+		}
 		ctx, span := tracer.Start(ctx, "routeforge.request",
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(
 				attribute.String("http.request.method", r.Method),
 				attribute.String("http.route", chatCompletionsRoute),
-				attribute.String("routeforge.routing.policy", routingPolicy),
+				attribute.String("routeforge.routing.policy", policy),
 			),
 		)
 		defer span.End()
@@ -66,7 +70,7 @@ func TraceRequests(next http.Handler, tracer trace.Tracer, propagator propagatio
 		if status >= http.StatusInternalServerError || outcome == "failure" {
 			span.SetStatus(codes.Error, "server_error")
 		}
-		metrics.RecordRequest(ctx, routingPolicy, metricState.streaming, outcome, time.Since(started))
+		metrics.RecordRequest(ctx, policy, metricState.streaming, outcome, time.Since(started))
 	})
 }
 

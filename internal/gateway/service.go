@@ -55,9 +55,7 @@ type Service struct {
 	fallback           bool
 	health             *healthTracker
 	telemetry          *telemetryTracker
-	routing            routingPolicy
-	routingName        string
-	rankEligible       bool
+	routing            *runtimeRouting
 	now                func() time.Time
 	accounting         *accounting.Tracker
 	pricingMu          sync.RWMutex
@@ -87,8 +85,7 @@ func NewWithCircuitBreaker(p provider.Provider, resolver *model.Resolver, config
 		resolver:           resolver,
 		health:             trackerFor(providers, config),
 		telemetry:          telemetryFor(providers),
-		routing:            deterministicRoutingPolicy{},
-		routingName:        RoutingPolicyDeterministic,
+		routing:            newRuntimeRouting(RoutingConfig{}, deterministicRoutingPolicy{}, false),
 		now:                time.Now,
 		accounting:         accounting.NewTracker(nil, accounting.DefaultModelCapacity),
 		tracer:             noopTracer(),
@@ -115,8 +112,7 @@ func NewAutoWithCircuitBreaker(resolver *model.Resolver, config CircuitConfig, p
 		fallback:           true,
 		health:             trackerFor(providers, config),
 		telemetry:          telemetryFor(providers),
-		routing:            deterministicRoutingPolicy{},
-		routingName:        RoutingPolicyDeterministic,
+		routing:            newRuntimeRouting(RoutingConfig{}, deterministicRoutingPolicy{}, false),
 		now:                time.Now,
 		accounting:         accounting.NewTracker(nil, accounting.DefaultModelCapacity),
 		tracer:             noopTracer(),
@@ -151,9 +147,7 @@ func newAutoService(resolver *model.Resolver, circuitConfig CircuitConfig, routi
 		fallback:           true,
 		health:             newHealthTracker(providerNames(providers), circuitConfig, now),
 		telemetry:          newTelemetryTracker(providerNames(providers), defaultTelemetrySampleCapacity, now),
-		routing:            routing,
-		routingName:        normalizedRoutingPolicyName(routingConfig.Policy),
-		rankEligible:       rankEligible,
+		routing:            newRuntimeRouting(routingConfig, routing, rankEligible),
 		now:                now,
 		accounting:         accounting.NewTracker(nil, accounting.DefaultModelCapacity),
 		tracer:             noopTracer(),
@@ -164,6 +158,7 @@ func newAutoService(resolver *model.Resolver, circuitConfig CircuitConfig, routi
 }
 
 func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest) (result openai.ChatCompletionResponse, resultErr error) {
+	ctx, _ = s.BindRouting(ctx)
 	history := s.beginRequestHistory(ctx, req)
 	defer func() { history.finish(resultErr) }()
 	if err := validateCore(req); err != nil {
@@ -209,7 +204,7 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 			cacheKey, _ = cache.Key(req, item.Name(), providerRequest.Model)
 			if cached, hit := s.lookupCompletion(ctx, cacheKey); hit && s.health.eligible(item.Name()) && ctx.Err() == nil {
 				if attemptNumber == 0 {
-					s.metrics.RecordRoutingSelection(ctx, item.Name(), s.routingName, false)
+					s.metrics.RecordRoutingSelection(ctx, item.Name(), s.requestRouting(ctx).config.Policy, false)
 				}
 				history.cacheHit(item.Name())
 				return cached, nil
@@ -267,6 +262,7 @@ func (s *Service) Complete(ctx context.Context, req openai.ChatCompletionRequest
 type EmitFunc func(provider.StreamChunk) error
 
 func (s *Service) Stream(ctx context.Context, req openai.ChatCompletionRequest, emit EmitFunc) (resultErr error) {
+	ctx, _ = s.BindRouting(ctx)
 	history := s.beginRequestHistory(ctx, req)
 	defer func() { history.finish(resultErr) }()
 	if err := validateCore(req); err != nil {
@@ -428,15 +424,16 @@ func providerNames(providers []provider.Provider) []string {
 }
 
 func (s *Service) orderedProviders(ctx context.Context, mode requestMode, requestModel string) []provider.Provider {
+	routing := s.requestRouting(ctx)
 	_, span := s.tracer.Start(ctx, "routeforge.routing", trace.WithAttributes(
-		attribute.String("routeforge.routing.policy", s.routingName),
+		attribute.String("routeforge.routing.policy", routing.config.Policy),
 		attribute.Bool("routeforge.request.streaming", mode == streamingMode),
 		attribute.Int("routeforge.routing.candidates", len(s.providers)),
 	))
 	defer span.End()
 
-	if !s.fallback || !s.rankEligible {
-		ordered := s.routing.order(s.providers, mode, nil, nil, s.now())
+	if !s.fallback || !routing.rankEligible {
+		ordered := append([]provider.Provider(nil), s.providers...)
 		recordRoutingResult(span, ordered, len(ordered))
 		return ordered
 	}
@@ -459,15 +456,15 @@ func (s *Service) orderedProviders(ctx context.Context, mode requestMode, reques
 		}
 	}
 
-	prices := s.candidatePrices(requestModel, eligible)
-	ordered := s.routing.order(eligible, mode, snapshots, prices, s.now())
+	prices := s.candidatePrices(requestModel, eligible, routing.policy)
+	ordered := routing.policy.order(eligible, mode, snapshots, prices, s.now())
 	ordered = append(ordered, ineligible...)
 	recordRoutingResult(span, ordered, len(eligible))
 	return ordered
 }
 
-func (s *Service) candidatePrices(requestModel string, candidates []provider.Provider) map[string]accounting.Rates {
-	if _, ok := s.routing.(pricingRoutingPolicy); !ok {
+func (s *Service) candidatePrices(requestModel string, candidates []provider.Provider, policy routingPolicy) map[string]accounting.Rates {
+	if _, ok := policy.(pricingRoutingPolicy); !ok {
 		return nil
 	}
 

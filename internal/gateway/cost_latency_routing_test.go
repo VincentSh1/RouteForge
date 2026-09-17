@@ -365,7 +365,7 @@ func TestCostLatencyDoesNotAffectExplicitProviders(t *testing.T) {
 
 func testCostLatencyPolicy(percent uint64, minSamples int, maxAge time.Duration, explorationInterval int) *costLatencyRoutingPolicy {
 	return &costLatencyRoutingPolicy{
-		latency: &latencyRoutingPolicy{
+		latency: &latencyRoutingPolicy{explorationState: &explorationState{},
 			minSamples: minSamples, sampleMaxAge: maxAge, explorationInterval: explorationInterval,
 		},
 		maxLatencyOverFastestPercent: percent,

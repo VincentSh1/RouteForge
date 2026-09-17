@@ -12,12 +12,15 @@ import (
 	"github.com/VincentSh1/RouteForge/internal/persistence"
 )
 
-func NewServer(addr string, reader persistence.Reader, snapshot func() Overview) *http.Server {
+func NewServer(addr string, reader persistence.Reader, snapshot func() Overview, routing ...routingControl) *http.Server {
 	mux := http.NewServeMux()
 	benchmarks := newBenchmarkHandler(benchmark.BuiltInScenario)
 	mux.Handle("/admin/v1/benchmarks", benchmarks)
 	mux.Handle("/admin/v1/benchmarks/{scenario}", benchmarks)
 	mux.Handle("/admin/v1/overview", operationsHandler(snapshot))
+	if len(routing) != 0 {
+		mux.Handle("/admin/v1/routing/config", routingHandler(routing[0]))
+	}
 	mux.Handle("/", NewHandler(reader))
 	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}

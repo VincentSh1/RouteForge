@@ -116,8 +116,12 @@ type latencyRoutingPolicy struct {
 	minSamples          int
 	sampleMaxAge        time.Duration
 	explorationInterval int
-	explorationMu       sync.Mutex
-	explorationCounts   [2]int
+	*explorationState
+}
+
+type explorationState struct {
+	explorationMu     sync.Mutex
+	explorationCounts [2]int
 }
 
 type costLatencyRoutingPolicy struct {
@@ -162,6 +166,7 @@ func newLatencyRoutingPolicy(config RoutingConfig) (*latencyRoutingPolicy, error
 		return nil, fmt.Errorf("routing exploration interval must be positive")
 	}
 	return &latencyRoutingPolicy{
+		explorationState:    &explorationState{},
 		minSamples:          config.MinSamples,
 		sampleMaxAge:        config.SampleMaxAge,
 		explorationInterval: config.ExplorationInterval,

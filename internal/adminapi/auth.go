@@ -1,6 +1,7 @@
 package adminapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -181,9 +182,7 @@ func authHandler(next http.Handler, store *sessions) http.Handler {
 				writeError(w, 404, "not_found", "endpoint not found")
 				return
 			}
-			media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-			origins := r.Header.Values("Origin")
-			if r.URL.RawQuery != "" || err != nil || media != "application/json" || len(origins) != 1 || origins[0] != store.origin || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			if !trustedJSON(r, store.origin) {
 				writeError(w, 403, "forbidden", "request not permitted")
 				return
 			}
@@ -204,6 +203,19 @@ func authHandler(next http.Handler, store *sessions) http.Handler {
 			authFailure(w)
 			return
 		}
+		if path == "/admin/v1/routing/config" && r.Method == http.MethodPut {
+			if store == nil || !trustedJSON(r, store.origin) {
+				writeError(w, 403, "forbidden", "request not permitted")
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), routingWriteAuthorized{}, true))
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func trustedJSON(r *http.Request, origin string) bool {
+	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	origins := r.Header.Values("Origin")
+	return r.URL.RawQuery == "" && err == nil && media == "application/json" && len(origins) == 1 && origins[0] == origin && r.Header.Get("Sec-Fetch-Site") != "cross-site"
 }

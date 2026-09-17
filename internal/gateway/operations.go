@@ -46,11 +46,20 @@ type OperationsSnapshot struct {
 // Config supplies the dormant telemetry thresholds for non-latency policies.
 func (s *Service) OperationsSnapshot(config RoutingConfig) OperationsSnapshot {
 	now := s.now()
-	routing := RoutingState{Policy: s.routingName, Auto: s.fallback, ProviderOrder: providerNames(s.providers),
+	version := s.routing.current.Load()
+	// Caller defaults remain supported for existing offline inspection callers.
+	if config.MinSamples == 0 {
+		config.MinSamples = version.config.MinSamples
+	}
+	if config.SampleMaxAge == 0 {
+		config.SampleMaxAge = version.config.SampleMaxAge
+	}
+	config.ExplorationInterval = version.config.ExplorationInterval
+	routing := RoutingState{Policy: version.config.Policy, Auto: s.fallback, ProviderOrder: providerNames(s.providers),
 		MinSamples: config.MinSamples, SampleMaxAgeUS: config.SampleMaxAge.Microseconds(), ExplorationInterval: config.ExplorationInterval}
 	var latency *latencyRoutingPolicy
 	maxAge := config.SampleMaxAge
-	switch policy := s.routing.(type) {
+	switch policy := version.policy.(type) {
 	case *latencyRoutingPolicy:
 		latency = policy
 	case *costLatencyRoutingPolicy:

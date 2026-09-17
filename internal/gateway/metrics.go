@@ -10,7 +10,7 @@ import (
 
 func (s *Service) recordAttemptStart(ctx context.Context, providerName string, streaming bool, attemptNumber int, fallbackFrom string, fallbackReason providerOutcome) {
 	if attemptNumber == 1 {
-		s.metrics.RecordRoutingSelection(ctx, providerName, s.routingName, streaming)
+		s.metrics.RecordRoutingSelection(ctx, providerName, s.requestRouting(ctx).config.Policy, streaming)
 		return
 	}
 	s.metrics.RecordFallback(ctx, fallbackFrom, providerName, fallbackReason.String())

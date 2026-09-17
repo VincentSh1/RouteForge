@@ -37,7 +37,7 @@ func (s *Service) beginRequestHistory(ctx context.Context, request openai.ChatCo
 		service: s,
 		ctx:     ctx,
 		record: persistence.RequestRecord{
-			RequestID: requestID, StartedAt: s.now().UTC(), RoutingPolicy: boundedMetadata(s.routingName, 32),
+			RequestID: requestID, StartedAt: s.now().UTC(), RoutingPolicy: boundedMetadata(s.requestRouting(ctx).config.Policy, 32),
 			Streaming: request.Stream, LogicalModel: boundedMetadata(request.Model, maxPersistedModelLength),
 		},
 	}

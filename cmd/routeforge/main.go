@@ -92,7 +92,7 @@ func run() error {
 		service.SetCache(completionCache, cfg.CacheTTL)
 	}
 	handler := httpapi.NewHandler(service)
-	routes := httpapi.TraceRequests(handler.Routes(), observabilitySetup.Tracer(), observabilitySetup.Propagator(), cfg.RoutingPolicy, observabilitySetup.Metrics())
+	routes := httpapi.TraceRequests(handler.Routes(), observabilitySetup.Tracer(), observabilitySetup.Propagator(), cfg.RoutingPolicy, observabilitySetup.Metrics(), service.BindRouting)
 	server := httpapi.NewServer(cfg, routes)
 	servers := []*http.Server{server}
 	if cfg.MetricsEnabled {
@@ -105,7 +105,7 @@ func run() error {
 			return adminapi.Overview{OperationsSnapshot: service.OperationsSnapshot(gateway.RoutingConfig{
 				MinSamples: cfg.RoutingMinSamples, SampleMaxAge: cfg.RoutingSampleMaxAge, ExplorationInterval: cfg.RoutingExplorationInterval,
 			}), Features: adminapi.Features{Cache: cfg.CacheEnabled, Persistence: cfg.PostgresEnabled, Metrics: cfg.MetricsEnabled, Tracing: cfg.OTelEnabled}}
-		})
+		}, service)
 		adminServer.Handler = adminapi.Authenticate(adminServer.Handler, adminapi.AuthConfig{Enabled: cfg.AdminAuthEnabled, Secret: cfg.AdminSecret, TTL: cfg.AdminSessionTTL, Origin: cfg.AdminOrigin})
 		servers = append(servers, adminServer)
 	}
@@ -203,6 +203,9 @@ func buildService(cfg config.Config) (*gateway.Service, error) {
 			return nil, fmt.Errorf("configured provider is unavailable")
 		}
 		service := gateway.NewWithCircuitBreaker(selected, resolver, circuitConfig)
+		if err := service.ConfigureRouting(gateway.RoutingConfig{Policy: cfg.RoutingPolicy, MinSamples: cfg.RoutingMinSamples, SampleMaxAge: cfg.RoutingSampleMaxAge, ExplorationInterval: cfg.RoutingExplorationInterval, MaxLatencyOverFastestPercent: cfg.RoutingMaxLatencyOverFastestPercent}); err != nil {
+			return nil, err
+		}
 		service.SetPricing(configuredPrices(cfg))
 		return service, nil
 	}

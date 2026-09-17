@@ -25,7 +25,7 @@ func TestOperationsSnapshotDoesNotMutateState(t *testing.T) {
 	clock.Advance(time.Minute)
 	before, _ := s.health.snapshot("first")
 	telemetry, _ := s.telemetry.snapshot("first")
-	policy := s.routing.(*latencyRoutingPolicy)
+	policy := s.routing.current.Load().policy.(*latencyRoutingPolicy)
 	counts := policy.explorationCounts
 	for range 20 {
 		view := s.OperationsSnapshot(RoutingConfig{})

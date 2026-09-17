@@ -61,7 +61,7 @@ func TestExplorationDoesNotAffectDeterministicOrExplicitRouting(t *testing.T) {
 
 func TestExplorationCadenceIsDeterministic(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	policy := &latencyRoutingPolicy{minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 3}
+	policy := &latencyRoutingPolicy{explorationState: &explorationState{}, minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 3}
 	providers := routingProviders()
 	snapshots := map[string]ProviderTelemetrySnapshot{
 		"first":  routingSnapshot(now, repeatedDuration(100*time.Millisecond, 5), nil, nil),
@@ -85,7 +85,7 @@ func TestExplorationSelectsLargestDeficitWithStableTieBreak(t *testing.T) {
 	}
 
 	t.Run("largest deficit", func(t *testing.T) {
-		policy := &latencyRoutingPolicy{minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
+		policy := &latencyRoutingPolicy{explorationState: &explorationState{}, minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
 		snapshots := map[string]ProviderTelemetrySnapshot{
 			"first":  routingSnapshot(now, repeatedDuration(100*time.Millisecond, 5), nil, nil),
 			"second": routingSnapshot(now, repeatedDuration(100*time.Millisecond, 2), nil, nil),
@@ -95,7 +95,7 @@ func TestExplorationSelectsLargestDeficitWithStableTieBreak(t *testing.T) {
 	})
 
 	t.Run("configured order breaks ties", func(t *testing.T) {
-		policy := &latencyRoutingPolicy{minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
+		policy := &latencyRoutingPolicy{explorationState: &explorationState{}, minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
 		snapshots := map[string]ProviderTelemetrySnapshot{
 			"first":  routingSnapshot(now, repeatedDuration(100*time.Millisecond, 5), nil, nil),
 			"second": routingSnapshot(now, repeatedDuration(100*time.Millisecond, 1), nil, nil),
@@ -114,7 +114,7 @@ func TestExplorationUsesFreshModeSpecificSamples(t *testing.T) {
 	secondTTFC := repeatedDuration(20*time.Millisecond, 5)
 
 	t.Run("streaming samples do not warm non-streaming", func(t *testing.T) {
-		policy := &latencyRoutingPolicy{minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
+		policy := &latencyRoutingPolicy{explorationState: &explorationState{}, minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
 		snapshots := map[string]ProviderTelemetrySnapshot{
 			"first":  routingSnapshot(now, firstComplete, firstTTFC, nil),
 			"second": routingSnapshot(now, nil, secondTTFC, nil),
@@ -123,7 +123,7 @@ func TestExplorationUsesFreshModeSpecificSamples(t *testing.T) {
 	})
 
 	t.Run("non-streaming samples do not warm streaming", func(t *testing.T) {
-		policy := &latencyRoutingPolicy{minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
+		policy := &latencyRoutingPolicy{explorationState: &explorationState{}, minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
 		snapshots := map[string]ProviderTelemetrySnapshot{
 			"first":  routingSnapshot(now, firstComplete, firstTTFC, nil),
 			"second": routingSnapshot(now, secondComplete, nil, nil),
@@ -132,7 +132,7 @@ func TestExplorationUsesFreshModeSpecificSamples(t *testing.T) {
 	})
 
 	t.Run("stale samples resume warm-up", func(t *testing.T) {
-		policy := &latencyRoutingPolicy{minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
+		policy := &latencyRoutingPolicy{explorationState: &explorationState{}, minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
 		snapshots := map[string]ProviderTelemetrySnapshot{
 			"first":  routingSnapshot(now, firstComplete, nil, nil),
 			"second": routingSnapshot(now.Add(-2*time.Minute), secondComplete, nil, nil),
@@ -143,7 +143,7 @@ func TestExplorationUsesFreshModeSpecificSamples(t *testing.T) {
 
 func TestExplorationCountersAreIndependentByRequestMode(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	policy := &latencyRoutingPolicy{minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 2}
+	policy := &latencyRoutingPolicy{explorationState: &explorationState{}, minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 2}
 	providers := routingProviders()
 	snapshots := map[string]ProviderTelemetrySnapshot{
 		"first": routingSnapshot(
@@ -163,7 +163,7 @@ func TestExplorationCountersAreIndependentByRequestMode(t *testing.T) {
 
 func TestExplorationStopsWhenWarmAndLatencyRankingResumes(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	policy := &latencyRoutingPolicy{minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
+	policy := &latencyRoutingPolicy{explorationState: &explorationState{}, minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 1}
 	providers := routingProviders()
 	snapshots := map[string]ProviderTelemetrySnapshot{
 		"first":  routingSnapshot(now, repeatedDuration(100*time.Millisecond, 5), nil, nil),
@@ -235,7 +235,7 @@ func TestStreamingExplorationWarmsTTFC(t *testing.T) {
 
 func TestConcurrentExplorationCadenceIsBounded(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	policy := &latencyRoutingPolicy{minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 10}
+	policy := &latencyRoutingPolicy{explorationState: &explorationState{}, minSamples: 5, sampleMaxAge: time.Minute, explorationInterval: 10}
 	providers := routingProviders()
 	snapshots := map[string]ProviderTelemetrySnapshot{
 		"first":  routingSnapshot(now, repeatedDuration(100*time.Millisecond, 5), nil, nil),

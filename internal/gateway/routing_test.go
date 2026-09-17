@@ -252,7 +252,7 @@ func newLatencyTestServiceWithConfig(t *testing.T, clock *manualClock, minSample
 }
 
 func testLatencyRoutingPolicy(minSamples int, sampleMaxAge time.Duration) *latencyRoutingPolicy {
-	return &latencyRoutingPolicy{
+	return &latencyRoutingPolicy{explorationState: &explorationState{},
 		minSamples: minSamples, sampleMaxAge: sampleMaxAge, explorationInterval: 1000,
 	}
 }
