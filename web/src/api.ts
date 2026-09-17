@@ -83,14 +83,14 @@ function detail(value: unknown): value is RequestDetail {
     ['ttfc_us', 'input_tokens', 'output_tokens', 'total_tokens', 'estimated_cost_micro_usd'].every(key => item[key] === null || integer(item[key])));
 }
 
-async function read<T>(path: string, signal: AbortSignal, valid: (value: unknown) => value is T): Promise<T> {
+async function read<T>(path: string, signal: AbortSignal, valid: (value: unknown) => value is T, init: RequestInit = {}): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener('abort', abort, { once: true });
   if (signal.aborted) abort();
   const timer = setTimeout(abort, 10000);
   try {
-    const response = await fetch(path, { signal: controller.signal, cache: 'no-store', credentials: 'same-origin' });
+    const response = await fetch(path, { ...init, signal: controller.signal, cache: 'no-store', credentials: 'same-origin' });
     if (response.status === 401 && !controller.signal.aborted) window.dispatchEvent(new Event('routeforge-session-expired'));
     if (!response.ok) throw new APIError(response.status);
     const value: unknown = await response.json();
@@ -167,6 +167,21 @@ function overview(value: unknown): value is Overview {
 }
 export const operationsAPI = {
   overview: (signal: AbortSignal) => read('/api/overview', signal, overview),
+};
+
+export interface RoutingSettings {
+  policy: string;
+  exploration_interval: number;
+  max_latency_over_fastest_percent: number | null;
+}
+function routingSettings(value: unknown): value is RoutingSettings {
+  return object(value) && filterOptions.routing_policy.includes(String(value.policy)) && integer(value.exploration_interval) &&
+    (value.max_latency_over_fastest_percent === null || integer(value.max_latency_over_fastest_percent));
+}
+export const routingAPI = {
+  get: (signal: AbortSignal) => read('/api/routing/config', signal, routingSettings),
+  save: (settings: RoutingSettings, signal: AbortSignal) => read('/api/routing/config', signal, routingSettings,
+    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) }),
 };
 
 export type BenchmarkState = 'warm' | 'cold';

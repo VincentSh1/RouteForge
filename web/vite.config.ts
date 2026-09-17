@@ -6,6 +6,10 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     proxy: {
+      '/api/routing': {
+        target: 'http://127.0.0.1:8081',
+        rewrite: (path) => path.replace(/^\/api\/routing/, '/admin/v1/routing'),
+      },
       '/api/auth': {
         target: 'http://127.0.0.1:8081',
         rewrite: (path) => path.replace(/^\/api\/auth/, '/admin/v1/auth'),

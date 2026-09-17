@@ -10,7 +10,7 @@ for attempt in $(seq 1 60); do
 done
 test "$ready" = true
 
-for path in requests overview benchmarks; do
+for path in requests overview benchmarks routing/config; do
   test "$(command curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "$console_url/api/$path")" = 401
   test "$(command curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8081/admin/v1/$path")" = 401
 done
@@ -74,6 +74,27 @@ auth_curl --fail --silent --show-error --max-time 5 "$console_url/benchmarks" | 
 test "$(auth_curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "$console_url/api/benchmarks/unknown")" = 400
 test "$(auth_curl --silent --max-time 5 -X POST -o /dev/null -w '%{http_code}' "$console_url/api/benchmarks/stable")" = 405
 echo "Built-in benchmark comparisons, reproducibility, isolation, and console proxy verified"
+
+original="$(auth_curl --fail --silent --max-time 5 "$console_url/api/routing/config")"
+updated="$(printf '%s' "$original" | jq -c '.policy = "cost"')"
+test "$(auth_curl --silent --max-time 5 -X PUT -H 'Content-Type: application/json' --data "$updated" -o /dev/null -w '%{http_code}' "$console_url/api/routing/config")" = 403
+printf '%s' "$updated" | auth_curl --fail --silent --max-time 5 -X PUT -H 'Origin: http://127.0.0.1:3001' -H 'Content-Type: application/json' --data-binary @- "$console_url/api/routing/config" | jq -e '.policy == "cost"' >/dev/null
+auth_curl --fail --silent --max-time 5 "$console_url/api/routing/config" | jq -e '.policy == "cost"' >/dev/null
+auth_curl --fail --silent --max-time 5 "$console_url/api/overview" | jq -e '.routing.policy == "cost"' >/dev/null
+# Streaming bypasses Redis, proving a real mock attempt uses the new policy.
+command curl --fail --silent --max-time 10 -H 'Content-Type: application/json' --data '{"model":"routeforge/general","stream":true,"messages":[{"role":"user","content":"RouteForge routing smoke"}]}' http://127.0.0.1:8080/v1/chat/completions >/dev/null
+recorded=false
+for attempt in $(seq 1 30); do
+  if auth_curl --fail --silent --max-time 5 "$console_url/api/requests?routing_policy=cost&streaming=true&limit=1" | jq -e '.requests | any(.routing_policy == "cost" and .attempt_count == 1)' >/dev/null; then recorded=true; break; fi
+  sleep 1
+done
+# Restore before assertions so normal smoke failures do not leave changed settings.
+printf '%s' "$original" | auth_curl --fail --silent --max-time 5 -X PUT -H 'Origin: http://127.0.0.1:3001' -H 'Content-Type: application/json' --data-binary @- "$console_url/api/routing/config" >/dev/null
+test "$recorded" = true
+restored="$(auth_curl --fail --silent --max-time 5 "$console_url/api/routing/config" | jq -S -c .)"
+test "$restored" = "$(printf '%s' "$original" | jq -S -c .)"
+auth_curl --fail --silent --max-time 5 "$console_url/routing" | grep -q 'RouteForge Console'
+echo "Authenticated routing update, Origin rejection, real mock policy history, and restoration verified"
 
 auth_curl --fail --silent --max-time 5 -H 'Origin: http://127.0.0.1:3001' -H 'Content-Type: application/json' \
   --data '{}' "$console_url/api/auth/logout" | jq -e '.authenticated == false' >/dev/null
