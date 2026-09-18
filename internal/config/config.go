@@ -164,26 +164,21 @@ func Load() (Config, error) {
 		{"ROUTEFORGE_ROUTING_SAMPLE_MAX_AGE", &cfg.RoutingSampleMaxAge},
 		{"ROUTEFORGE_CACHE_TTL", &cfg.CacheTTL},
 	}
-	if raw := os.Getenv("ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD"); raw != "" {
-		threshold, err := strconv.Atoi(raw)
-		if err != nil || threshold <= 0 {
-			return Config{}, validationError("ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD must be a positive integer")
+	for _, value := range []struct {
+		key    string
+		target *int
+	}{
+		{"ROUTEFORGE_CIRCUIT_FAILURE_THRESHOLD", &cfg.CircuitFailureThreshold},
+		{"ROUTEFORGE_ROUTING_MIN_SAMPLES", &cfg.RoutingMinSamples},
+		{"ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL", &cfg.RoutingExplorationInterval},
+	} {
+		if raw := os.Getenv(value.key); raw != "" {
+			number, err := strconv.Atoi(raw)
+			if err != nil || number <= 0 {
+				return Config{}, validationError("%s must be a positive integer", value.key)
+			}
+			*value.target = number
 		}
-		cfg.CircuitFailureThreshold = threshold
-	}
-	if raw := os.Getenv("ROUTEFORGE_ROUTING_MIN_SAMPLES"); raw != "" {
-		minimum, err := strconv.Atoi(raw)
-		if err != nil || minimum <= 0 {
-			return Config{}, validationError("ROUTEFORGE_ROUTING_MIN_SAMPLES must be a positive integer")
-		}
-		cfg.RoutingMinSamples = minimum
-	}
-	if raw := os.Getenv("ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL"); raw != "" {
-		interval, err := strconv.Atoi(raw)
-		if err != nil || interval <= 0 {
-			return Config{}, validationError("ROUTEFORGE_ROUTING_EXPLORATION_INTERVAL must be a positive integer")
-		}
-		cfg.RoutingExplorationInterval = interval
 	}
 	if raw, ok := os.LookupEnv("ROUTEFORGE_ROUTING_MAX_LATENCY_OVER_FASTEST_PERCENT"); ok && strings.TrimSpace(raw) != "" {
 		trimmed := strings.TrimSpace(raw)
