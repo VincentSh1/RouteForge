@@ -669,7 +669,7 @@ see the authentication section below. There is no CORS support. Do not expose
 this listener to a remote/shared network. Responses contain operational metadata only: prompts,
 responses, credentials, user information, Redis keys, and cached content are
 never available. Responses use `Cache-Control: no-store`. This is the future
-backend for the local read-only RouteForge Console described below.
+backend for the local RouteForge Console described below.
 
 - `GET /admin/v1/health`: listener liveness, not a database connectivity probe.
 - `GET /admin/v1/requests`: summaries in `started_at DESC, request_id DESC` order.
@@ -720,7 +720,8 @@ Start `docker compose up --build -d`, run `./scripts/generate-demo-traffic.sh`,
 then open **http://127.0.0.1:3001** and log in with the configured admin secret.
 The console inspects real PostgreSQL-backed
 request history; Grafana at port 3000 remains the infrastructure/time-series
-dashboard. There are no fabricated records or write/routing controls.
+dashboard. There are no fabricated records. The only write controls are the
+authenticated runtime routing settings described below.
 
 The request table exposes metadata, outcomes, duration, provider selection,
 attempt/fallback counts, and cache-hit status. Apply the history API's provider,
@@ -744,7 +745,7 @@ development server. Same-origin `/api/requests` paths proxy internally to
 `routeforge:8081/admin/v1/requests`, including query strings and detail IDs.
 The proxy resolves service DNS again after container replacement. Read-only API
 routes forward the session cookie but no request bodies. Only authentication
-routes forward bounded JSON bodies, Content-Type, and Origin/Fetch Metadata
+routes and the exact routing-config endpoint forward bounded JSON bodies, Content-Type, and Origin/Fetch Metadata
 headers. Authorization headers are never forwarded. Its host port binds loopback
 only, with no CORS support. **Do not expose this stack to
 remote/shared networks.**
@@ -774,6 +775,33 @@ read-only proxy behavior, and real persisted cache-hit history. No new workflow
 or browser automation service is required.
 
 ## Current provider and routing operations
+
+### Runtime routing settings
+
+The Console's **Routing settings** page uses `GET /admin/v1/routing/config`
+and `PUT /admin/v1/routing/config` (same-origin `/api/routing/config`). PUT
+requires an authenticated admin session, trusted Origin, and JSON; it is forbidden
+when admin authentication is disabled. All other control-plane data remains read-only.
+
+A replacement document contains exactly `policy`, `exploration_interval`, and
+`max_latency_over_fastest_percent` (integer or explicit `null`). Policies are
+`deterministic`, `latency`, `cost`, and `cost_latency`. Exploration accepts whole
+numbers 1–1,000,000; tolerance accepts 0–1,000,000 percent and is required for
+`cost_latency`. Zero accepts only fastest measured latency ties. Other policies
+retain the tolerance as dormant configuration; it is not a universal tradeoff default.
+
+Updates are atomic and apply to new requests. In-flight requests retain one policy
+version for routing, fallback, history, metrics and tracing. Exploration counters,
+telemetry, circuits, and accounting are preserved; changing the interval applies
+the new threshold to retained counters on the next eligible exploration decision.
+Explicit-provider mode still uses its configured provider, regardless of policy.
+No pricing, model mappings, credentials or provider membership can be changed.
+
+These settings are **process-local and non-durable**: restarting RouteForge restores
+environment-configured startup settings. Concurrent saves are last-write-wins.
+The UI confirms changes, waits for server acceptance, then rereads settings and
+operations. Authentication does not replace TLS or deployment-boundary security;
+the console remains local-only. No PostgreSQL configuration persistence is added.
 
 The console's **Overview** (`/overview`) and **Providers** (`/providers`) pages
 read `GET /admin/v1/overview` through the same-origin `/api/overview` proxy.
@@ -1127,6 +1155,37 @@ A deployment must explicitly configure
 `ROUTEFORGE_ADDR` to listen on a non-loopback interface.
 
 ## Test
+
+### Local HTTP performance validation
+
+`cmd/routeforge-load` measures real RouteForge HTTP overhead against the local
+mock provider. It is separate from the deterministic routing-policy simulator:
+no real-provider performance or semantic quality is inferred.
+
+```sh
+./scripts/run-performance.sh local-run-1
+```
+
+Requires Docker Compose, Go and jq. The isolated suite compares concurrency
+1/8/32/64, synchronous cache misses/warm hits, and streaming bypass, with
+PostgreSQL persistence off/on. Warm-up is excluded. Versioned JSON includes
+throughput, success/error rates, nearest-rank p50/p95/p99 client latency and
+streaming TTFC, cache evidence, and persistence writes/errors/queue drops.
+No provider credentials are needed; no paid calls are made. This is a manual
+measurement suite, not a noisy performance gate in PR CI.
+
+See [performance methodology](benchmarks/performance/README.md) for isolation,
+bounds, commands, interpretation and limitations. Results are machine-specific;
+asynchronous persistence submission latency is not durable commit latency.
+
+The recorded arm64 local baseline completed 24,000 measured mock HTTP requests
+without HTTP errors. It also exposed bounded persistence-queue saturation:
+6,095 of 12,000 persistence-enabled request histories were dropped under these
+bursts. The [raw report](benchmarks/performance/v1/local-arm64-baseline.json)
+and methodology distinguish HTTP throughput from durable history coverage;
+these are not production capacity claims. No optimization was made.
+
+### Correctness checks
 
 ```sh
 go test ./...

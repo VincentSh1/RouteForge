@@ -1,0 +1,14 @@
+# Overlay for the isolated performance project only; normal demo defaults stay unchanged.
+services:
+  routeforge:
+    environment:
+      ROUTEFORGE_PROVIDER: mock
+      ROUTEFORGE_ADMIN_ENABLED: "false"
+      ROUTEFORGE_ADMIN_AUTH_ENABLED: "false"
+      ROUTEFORGE_POSTGRES_ENABLED: ${PERF_PERSISTENCE:-false}
+      ROUTEFORGE_CACHE_ENABLED: "true"
+      ROUTEFORGE_OTEL_ENABLED: "false"
+      ROUTEFORGE_CACHE_TTL: 10m
+    ports: !override
+      - 127.0.0.1:18080:8080
+      - 127.0.0.1:18090:9090
