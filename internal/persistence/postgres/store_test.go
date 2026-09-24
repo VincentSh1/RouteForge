@@ -94,3 +94,38 @@ func TestOpenSanitizesInvalidDatabaseConfiguration(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 }
+
+func TestRecordBatchKeepsOneRequestAndOrderedParameterizedAttempts(t *testing.T) {
+	now := time.Unix(1, 0)
+	record := persistence.RequestRecord{RequestID: "rfreq_synthetic", StartedAt: now, CompletedAt: now, RoutingPolicy: "deterministic", LogicalModel: "mock-model", Outcome: "success", AttemptCount: 2, FallbackCount: 1}
+	for i := range 2 {
+		record.Attempts = append(record.Attempts, persistence.AttemptRecord{AttemptNumber: i + 1, Provider: "mock", ResolvedProviderModel: "mock-model", StartedAt: now, CompletedAt: now, Outcome: "success", Fallback: i == 1})
+	}
+	batch, err := recordBatch(record)
+	if err != nil || len(batch.QueuedQueries) != 3 {
+		t.Fatal("incorrect request batch")
+	}
+	for i, query := range batch.QueuedQueries {
+		if strings.Contains(query.SQL, record.RequestID) || !strings.Contains(query.SQL, "$1") || query.Arguments[0] != record.RequestID {
+			t.Fatal("SQL must remain parameterized")
+		}
+		if i > 0 && query.Arguments[1] != i {
+			t.Fatal("attempt order changed")
+		}
+	}
+	if !strings.Contains(batch.QueuedQueries[0].SQL, "INSERT INTO routeforge_requests") {
+		t.Fatal("parent must precede attempts")
+	}
+	tooLarge := uint64(math.MaxInt64) + 1
+	record.Attempts[1].InputTokens = &tooLarge
+	if batch, err := recordBatch(record); err == nil || batch != nil {
+		t.Fatal("invalid final attempt produced executable batch")
+	}
+	record.Attempts = nil
+	record.AttemptCount = 0
+	record.FallbackCount = 0
+	record.CacheHit = true
+	if batch, err := recordBatch(record); err != nil || len(batch.QueuedQueries) != 1 {
+		t.Fatal("cache hit fabricated attempts")
+	}
+}

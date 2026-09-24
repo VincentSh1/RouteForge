@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/VincentSh1/RouteForge/internal/openai"
+	"github.com/VincentSh1/RouteForge/internal/persistence"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -17,6 +18,7 @@ var (
 
 // Metrics records bounded operational data only. A zero Metrics is a no-op.
 type Metrics struct {
+	meter              metric.Meter
 	requests           metric.Int64Counter
 	requestDuration    metric.Float64Histogram
 	routingSelections  metric.Int64Counter
@@ -98,6 +100,7 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 		return nil, err
 	}
 	return &Metrics{
+		meter:        meter,
 		cacheLookups: cacheLookups, cacheWrites: cacheWrites,
 		requests: requests, requestDuration: requestDuration,
 		routingSelections: routingSelections,
@@ -108,6 +111,39 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 }
 
 func NoopMetrics() *Metrics { return &Metrics{} }
+
+// ObservePersistence is registered once during startup. Scrapes only read
+// process-local counters; they never perform SQL or take recorder locks.
+func (m *Metrics) ObservePersistence(snapshot func() persistence.Stats) error {
+	if m == nil || m.meter == nil {
+		return nil
+	}
+	queue, err := m.meter.Int64ObservableGauge("routeforge_persistence_queue_depth", metric.WithDescription("Queued records excluding the active write"))
+	if err != nil {
+		return err
+	}
+	submitted, err := m.meter.Int64ObservableCounter("routeforge_persistence_submitted", metric.WithDescription("Record submissions while accepting, including queue-full drops"))
+	if err != nil {
+		return err
+	}
+	writes, err := m.meter.Int64ObservableCounter("routeforge_persistence_writes", metric.WithDescription("Completed database write operations, including errors"))
+	if err != nil {
+		return err
+	}
+	duration, err := m.meter.Float64ObservableCounter("routeforge_persistence_write_duration", metric.WithUnit("s"), metric.WithDescription("Cumulative database write time, including pool acquisition and errors, excluding queue wait"))
+	if err != nil {
+		return err
+	}
+	_, err = m.meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
+		stats := snapshot()
+		observer.ObserveInt64(queue, stats.QueueDepth)
+		observer.ObserveInt64(submitted, stats.Submitted)
+		observer.ObserveInt64(writes, stats.WriteCount)
+		observer.ObserveFloat64(duration, stats.WriteDuration.Seconds())
+		return nil
+	}, queue, submitted, writes, duration)
+	return err
+}
 
 func (m *Metrics) RecordCacheLookup(ctx context.Context, result string) {
 	if m == nil || m.cacheLookups == nil {

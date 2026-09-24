@@ -66,6 +66,9 @@ jobs:
           export ROUTEFORGE_ADMIN_SECRET="$(sed -n 's/^ROUTEFORGE_ADMIN_SECRET=//p' .env)"
           ./scripts/verify-observability-stack.sh 24
 
+      - name: Verify transactional persistence
+        run: ./scripts/verify-persistence.sh
+
       - name: Collect failure diagnostics
         if: failure()
         run: |

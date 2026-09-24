@@ -98,7 +98,7 @@ provider configured. The suite verifies its effective Compose mock setting befor
 sending traffic. URLs/models are not configurable, redirects and environment HTTP
 proxies are disabled, and no credentials are read. Responses are bounded to 1 MiB.
 Without `-metrics-port`, observations are null and cache behavior is unverified.
-Counts are capped at 20,000, warm-up at 2,000, concurrency at 64, phase duration at
+Counts are capped at 1,000,000, warm-up at 2,000, concurrency at 64, phase duration at
 5 minutes and request timeout at 30 seconds. Interrupting the client cancels workers.
 
 No production optimization is part of Phase 9A. A future optimization must follow
@@ -140,3 +140,119 @@ Measured windows ranged from **0.049 to 0.771 seconds**. Use these numbers as a
 reproducible **short-burst baseline**, not sustained
 capacity, production SLOs, or paid-provider performance. Longer repeated runs and
 profiling would be needed before choosing an optimization.
+
+## Sustained persistence validation (Phase 9B)
+
+```sh
+./scripts/run-performance.sh sustained-run-1 sustained
+```
+
+This extends the same suite: synchronous mock requests, cache disabled, concurrency
+8/32/64, persistence off/on, 2,000 excluded warm-up requests, then a **30-second**
+window with a one-million-request safety cap. Samples and percentile storage are
+bounded by that cap; the client may use tens of MiB for observations. Deadline
+cancellation can classify up to one in-flight request per worker as a failure;
+those observations are retained, not hidden as successful completions.
+
+Unlike the original burst suite, sustained mode scrapes once per second during
+the measurement window using one additional bounded client. Every comparison
+uses the same sampling overhead. `persistence_samples` contains cumulative deltas
+since warm-up plus instantaneous queue depth. Missing instruments are null.
+Queue depth excludes the active write; one-second samples can miss shorter peaks.
+Counters are individually atomic, not a transactional snapshot. For steady-state
+rates, subtract samples around seconds 5 and 25 rather than including the initial
+queue fill or post-load drain. Warm-up is count-based, not a claim that the database
+is fully warmed; these interior intervals provide the sustained comparison.
+
+The suite checks durable row growth against the written counter and checks each
+parent's declared attempt count against its child rows outside the timed window.
+The same disposable PostgreSQL instance accumulates history across the three
+enabled cases; each complete suite starts with a fresh named volume. No database
+port is published. All performance volumes are removed afterward.
+
+### Persistence instruments
+
+All new instruments are label-free and observational:
+
+| Prometheus name | Meaning |
+|---|---|
+| `routeforge_persistence_submitted_total` | Submissions while accepting, including full-queue rejections |
+| `routeforge_persistence_queue_depth` | Current buffered records, excluding the active write |
+| `routeforge_persistence_writes_total` | Completed store write calls, successful or failed |
+| `routeforge_persistence_write_duration_seconds_total` | Cumulative write-call seconds, including pool acquisition and errors, excluding queue wait |
+
+Existing `routeforge_persistence_records_total` continues to report terminal
+outcomes (`written`, `write_error`, `queue_full`). Use `rate()` on counters. Mean write-call
+duration is `rate(routeforge_persistence_write_duration_seconds_total[1m]) /
+rate(routeforge_persistence_writes_total[1m])` when the denominator is positive.
+This is **not** PostgreSQL server-only execution time or end-to-end commit latency
+from HTTP submission. The latter also includes queue wait.
+
+### Change under test
+
+Previously, one writer awaited BEGIN, the parent INSERT, each attempt INSERT, and
+COMMIT separately. The hardened store sends one pgx batch per request. pgx executes
+its statements in one implicit transaction; closing batch results consumes all
+results and reports errors. Unrelated requests are never combined. There is still
+one worker, a 256-record queue, a five-second write timeout, no retry loop, and
+fail-open inference. Schemas, NULL semantics, and operational-only metadata are
+unchanged. Shutdown still drains accepted records within its existing deadline.
+
+The Compose correctness workflow also runs `scripts/verify-persistence.sh` to test
+real PostgreSQL rollback on a late child constraint failure, duplicate rejection,
+cancellation, and nullable fallback metadata. Ordinary Go tests do not require a
+database. Sustained performance remains manual, not a noisy PR gate.
+
+### Recorded sustained results
+
+Three reports preserve the sequence: [unmodified writer](v1/sustained-baseline.json),
+[instrumented original writer](v1/sustained-instrumented-baseline.json), and
+[per-request batch](v1/sustained-batched.json). Same local arm64/Go 1.26.6 client,
+4-CPU approximately 5.8-GiB Docker VM, PostgreSQL 17.11, and six-case workload.
+Each matrix has one run per case; these are not confidence intervals or production
+capacity guarantees. Dirty source revisions identify the parent commit, not a
+clean release. The original writer awaited BEGIN, each INSERT and COMMIT; the
+instrumented baseline added only recorder statistics, before changing that SQL path.
+
+The initial, uninstrumented baseline dropped 91.61%, 97.40%, and 98.37% of history
+at concurrency 8/32/64. The instrumented baseline showed the queue at its 256-record
+bound and about 28.9 seconds spent writing during 29 sampled seconds. This is a
+continuously busy serial writer, not merely a startup burst. Write time includes
+transport, pool, scheduling, and PostgreSQL work; no claim is made that server-side
+SQL execution alone accounts for it.
+
+The controlled comparison below uses the **instrumented** baseline versus batch,
+with identical instrumentation. Write rates and mean write times use samples near
+seconds 5 and 25. Drop percentages cover the whole measured request window after
+bounded drain; client p95 covers all measured HTTP attempts.
+
+| Concurrency | Write records/s before → after | Mean write ms before → after | History dropped before → after | HTTP req/s before → after | HTTP p95 ms before → after |
+|---:|---:|---:|---:|---:|---:|
+| 8 | 773 → 1,337 | 1.288 → 0.739 | 91.72% → 85.92% | 9,564 → 9,630 | 1.361 → 1.309 |
+| 32 | 387 → 610 | 2.575 → 1.614 | 97.39% → 95.30% | 14,586 → 13,443 | 5.010 → 5.581 |
+| 64 | 279 → 487 | 3.559 → 2.003 | 98.33% → 97.03% | 17,461 → 16,360 | 8.582 → 9.093 |
+
+Batching improved durable throughput **1.58–1.74×** in these interior windows,
+demonstrating that sequential statement exchanges are a material contributor.
+It is not a free inference-speed win: at concurrency 32/64, more database work
+coincided with approximately 8%/6% lower HTTP throughput and 11%/6% higher p95.
+The shared VM/client environment and single-run variance prevent attributing all
+of that difference to one cause. With persistence disabled, the batch-build run
+served 12,348 / 18,884 / 21,129 req/s with p95 0.951 / 3.332 / 6.538 ms.
+
+The optimized enabled cases wrote 40,687 / 18,974 / 14,594 records and dropped
+248,230 / 384,335 / 476,208. There were **zero database write errors**, all durable
+counts and attempt-chain checks passed, and all queues settled after load stopped.
+HTTP failures in all reports were only `timeout_or_cancellation` (at most one per
+worker), consistent with fixed-deadline cancellation. That category does not
+independently distinguish per-request timeout from phase cancellation. None were
+reported as HTTP status, transport, or invalid-response errors. Full p50/p95/p99,
+totals, and samples are in the JSON.
+
+**Remaining limit:** every tested enabled case still saturates the bounded queue.
+Observed capacity under competing inference load was approximately 487–1,337
+records/s after batching, not a universal database capacity. A no-drop arrival-rate
+threshold was not established by this closed-loop matrix. History remains best-effort,
+not lossless. The smallest demonstrated improvement is retained; no larger queue,
+worker pool, cross-request transaction, retry mechanism, or new infrastructure was
+introduced to conceal the remaining capacity gap.

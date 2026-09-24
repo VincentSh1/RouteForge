@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -100,9 +101,17 @@ func TestAsyncRecorderQueueIsBounded(t *testing.T) {
 	if recorder.Submit(RequestRecord{RequestID: "rfreq_dropped"}) != SubmitQueueFull {
 		t.Fatal("full queue did not reject the record")
 	}
+	stats := recorder.Stats()
+	if stats.Submitted != 3 || stats.QueueDepth != 1 || stats.WriteCount != 0 {
+		t.Fatalf("unexpected blocked recorder stats: %+v", stats)
+	}
 	close(store.release)
 	if err := recorder.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
+	}
+	stats = recorder.Stats()
+	if stats.QueueDepth != 0 || stats.WriteCount != 2 || stats.WriteDuration <= 0 {
+		t.Fatalf("unexpected drained recorder stats: %+v", stats)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -171,4 +180,33 @@ func TestAsyncRecorderCopiesSubmittedRecords(t *testing.T) {
 	if written.RequestID != "rfreq_original" || *written.Attempts[0].InputTokens != 7 {
 		t.Fatalf("submitted record was mutated: %+v", written)
 	}
+}
+
+func TestConcurrentSubmissionsWriteEachAcceptedRecordExactlyOnce(t *testing.T) {
+	store := &fakeStore{}
+	recorder := NewAsyncRecorder(store, 4, nil)
+	var accepted sync.Map
+	var submitters sync.WaitGroup
+	for i := range 200 {
+		submitters.Go(func() {
+			id := fmt.Sprintf("rfreq_%d", i)
+			_ = recorder.Stats()
+			if recorder.Submit(RequestRecord{RequestID: id, AttemptCount: 1, Attempts: []AttemptRecord{{AttemptNumber: 1}}}) == SubmitQueued {
+				accepted.Store(id, true)
+			}
+		})
+	}
+	submitters.Wait()
+	if err := recorder.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range store.snapshot() {
+		if _, ok := accepted.LoadAndDelete(record.RequestID); !ok {
+			t.Fatal("duplicate or rejected record written")
+		}
+		if record.AttemptCount != len(record.Attempts) || record.Attempts[0].AttemptNumber != 1 {
+			t.Fatal("attempt chain changed")
+		}
+	}
+	accepted.Range(func(_, _ any) bool { t.Error("accepted record lost during drain"); return false })
 }

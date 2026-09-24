@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -50,11 +51,28 @@ type AsyncRecorder struct {
 	queue    chan RequestRecord
 	observer OutcomeObserver
 
-	mu        sync.Mutex
-	accepting bool
-	done      chan struct{}
-	ctx       context.Context
-	cancel    context.CancelFunc
+	mu         sync.Mutex
+	accepting  bool
+	done       chan struct{}
+	ctx        context.Context
+	cancel     context.CancelFunc
+	submitted  atomic.Int64
+	writeCount atomic.Int64
+	writeNanos atomic.Int64
+}
+
+// Stats is an observational snapshot. Counters are individually atomic; a
+// concurrent completion can occur between reads. QueueDepth excludes the write
+// in flight. No record metadata or database errors are retained here.
+type Stats struct {
+	Submitted     int64
+	QueueDepth    int64
+	WriteCount    int64
+	WriteDuration time.Duration
+}
+
+func (r *AsyncRecorder) Stats() Stats {
+	return Stats{Submitted: r.submitted.Load(), QueueDepth: int64(len(r.queue)), WriteCount: r.writeCount.Load(), WriteDuration: time.Duration(r.writeNanos.Load())}
 }
 
 func NewAsyncRecorder(store Store, capacity int, observer OutcomeObserver) *AsyncRecorder {
@@ -83,6 +101,7 @@ func (r *AsyncRecorder) Submit(record RequestRecord) SubmitResult {
 		r.mu.Unlock()
 		return SubmitClosed
 	}
+	r.submitted.Add(1)
 	select {
 	case r.queue <- record:
 		r.mu.Unlock()
@@ -124,7 +143,10 @@ func (r *AsyncRecorder) run() {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(r.ctx, defaultWriteTimeout)
+		started := time.Now()
 		err := r.store.Write(ctx, record)
+		r.writeNanos.Add(int64(time.Since(started)))
+		r.writeCount.Add(1)
 		cancel()
 		if err != nil {
 			r.observe(OutcomeWriteError)

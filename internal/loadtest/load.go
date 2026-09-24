@@ -22,19 +22,20 @@ import (
 )
 
 type Config struct {
-	Port           int
-	Concurrency    int
-	Requests       int
-	Warmup         int
-	MaxDuration    time.Duration
-	RequestTimeout time.Duration
-	Streaming      bool
-	CacheMode      string
-	Persistence    bool
+	Port              int
+	Concurrency       int
+	Requests          int
+	Warmup            int
+	MaxDuration       time.Duration
+	RequestTimeout    time.Duration
+	Streaming         bool
+	CacheMode         string
+	Persistence       bool
+	SamplePersistence bool
 }
 
 func (c Config) Validate() error {
-	if c.Port < 1 || c.Port > 65535 || c.Concurrency < 1 || c.Concurrency > 64 || c.Requests < 1 || c.Requests > 20000 || c.Warmup < 1 || c.Warmup > 2000 || c.MaxDuration < time.Millisecond || c.MaxDuration > 5*time.Minute || c.RequestTimeout < time.Millisecond || c.RequestTimeout > 30*time.Second {
+	if c.Port < 1 || c.Port > 65535 || c.Concurrency < 1 || c.Concurrency > 64 || c.Requests < 1 || c.Requests > 1000000 || c.Warmup < 1 || c.Warmup > 2000 || c.MaxDuration < time.Millisecond || c.MaxDuration > 5*time.Minute || c.RequestTimeout < time.Millisecond || c.RequestTimeout > 30*time.Second {
 		return errors.New("invalid load bounds")
 	}
 	if c.Streaming && c.CacheMode != "bypass" || !c.Streaming && c.CacheMode != "miss" && c.CacheMode != "warm_hit" && c.CacheMode != "disabled" {
@@ -65,30 +66,31 @@ func Summarize(values []time.Duration) *Percentiles {
 }
 
 type Report struct {
-	ClientEnvironment     Environment    `json:"client_environment"`
-	Version               int            `json:"version"`
-	Scenario              string         `json:"scenario"`
-	Concurrency           int            `json:"concurrency"`
-	Requested             int            `json:"requested_requests"`
-	Requests              int            `json:"requests"`
-	NotStarted            int            `json:"not_started"`
-	Warmup                int            `json:"warmup_requests_excluded"`
-	Successes             int            `json:"successes"`
-	Failures              int            `json:"failures"`
-	Errors                map[string]int `json:"errors"`
-	SuccessRate           float64        `json:"success_rate"`
-	ErrorRate             float64        `json:"error_rate"`
-	ElapsedSeconds        float64        `json:"elapsed_seconds"`
-	RequestsPerSecond     float64        `json:"requests_per_second"`
-	SuccessesPerSecond    float64        `json:"successes_per_second"`
-	MaxDurationSeconds    float64        `json:"max_duration_seconds"`
-	RequestTimeoutSeconds float64        `json:"request_timeout_seconds"`
-	ClientLatency         *Percentiles   `json:"client_latency"`
-	TTFC                  *Percentiles   `json:"streaming_ttfc"`
-	StreamDuration        *Percentiles   `json:"streaming_duration"`
-	CacheMode             string         `json:"cache_mode"`
-	Persistence           bool           `json:"persistence_enabled"`
-	Observations          *Observations  `json:"observations"`
+	ClientEnvironment     Environment         `json:"client_environment"`
+	Version               int                 `json:"version"`
+	Scenario              string              `json:"scenario"`
+	Concurrency           int                 `json:"concurrency"`
+	Requested             int                 `json:"requested_requests"`
+	Requests              int                 `json:"requests"`
+	NotStarted            int                 `json:"not_started"`
+	Warmup                int                 `json:"warmup_requests_excluded"`
+	Successes             int                 `json:"successes"`
+	Failures              int                 `json:"failures"`
+	Errors                map[string]int      `json:"errors"`
+	SuccessRate           float64             `json:"success_rate"`
+	ErrorRate             float64             `json:"error_rate"`
+	ElapsedSeconds        float64             `json:"elapsed_seconds"`
+	RequestsPerSecond     float64             `json:"requests_per_second"`
+	SuccessesPerSecond    float64             `json:"successes_per_second"`
+	MaxDurationSeconds    float64             `json:"max_duration_seconds"`
+	RequestTimeoutSeconds float64             `json:"request_timeout_seconds"`
+	ClientLatency         *Percentiles        `json:"client_latency"`
+	TTFC                  *Percentiles        `json:"streaming_ttfc"`
+	StreamDuration        *Percentiles        `json:"streaming_duration"`
+	CacheMode             string              `json:"cache_mode"`
+	Persistence           bool                `json:"persistence_enabled"`
+	Observations          *Observations       `json:"observations"`
+	PersistenceSamples    []PersistenceSample `json:"persistence_samples,omitempty"`
 }
 
 type Environment struct {
@@ -117,6 +119,9 @@ func Run(ctx context.Context, c Config, metricsPort int) (Report, error) {
 	}
 	if metricsPort < 0 || metricsPort > 65535 {
 		return Report{}, errors.New("invalid metrics port")
+	}
+	if c.SamplePersistence && metricsPort == 0 {
+		return Report{}, errors.New("persistence sampling requires a metrics port")
 	}
 	client := Client(c.Concurrency)
 	defer client.CloseIdleConnections()
@@ -156,9 +161,23 @@ func Run(ctx context.Context, c Config, metricsPort int) (Report, error) {
 			return Report{}, errors.New("warm-up counters did not settle")
 		}
 	}
+	monitorCtx, stopMonitor := context.WithCancel(ctx)
+	defer stopMonitor()
+	monitor := make(chan samplingResult, 1)
+	if c.SamplePersistence {
+		go samplePersistence(monitorCtx, metricsPort, baseline, monitor)
+	}
 	samples, elapsed := phase(ctx, client, c, c.Requests, 2001)
+	stopMonitor()
 	r := Report{Version: 1, Scenario: "mock_sync", Concurrency: c.Concurrency, Requested: c.Requests, Requests: len(samples), NotStarted: c.Requests - len(samples), Warmup: warmCount, Errors: map[string]int{}, ElapsedSeconds: elapsed.Seconds(), CacheMode: c.CacheMode, Persistence: c.Persistence, MaxDurationSeconds: c.MaxDuration.Seconds(), RequestTimeoutSeconds: c.RequestTimeout.Seconds()}
 	r.ClientEnvironment = Environment{runtime.Version(), runtime.GOOS, runtime.GOARCH, runtime.NumCPU()}
+	if c.SamplePersistence {
+		result := <-monitor
+		if result.err != nil {
+			return Report{}, result.err
+		}
+		r.PersistenceSamples = result.samples
+	}
 	var latencies, ttfcs []time.Duration
 	for _, sample := range samples {
 		latencies = append(latencies, sample.duration)

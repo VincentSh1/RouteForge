@@ -172,6 +172,12 @@ func initializePersistence(cfg config.Config, metrics *observability.Metrics) (p
 	recorder := persistence.NewAsyncRecorder(store, persistence.DefaultQueueCapacity, func(outcome persistence.WriteOutcome) {
 		metrics.RecordPersistence(context.Background(), string(outcome))
 	})
+	if err := metrics.ObservePersistence(recorder.Stats); err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = recorder.Shutdown(shutdownCtx)
+		return nil, nil, nil, errors.New("persistence metrics initialization failed")
+	}
 	return recorder, store, recorder.Shutdown, nil
 }
 

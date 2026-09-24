@@ -58,20 +58,22 @@ func (s *Store) Close() {
 }
 
 func (s *Store) Write(ctx context.Context, record persistence.RequestRecord) error {
-	if err := validateRecord(record); err != nil {
-		return err
-	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	batch, err := recordBatch(record)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		rollbackCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_ = tx.Rollback(rollbackCtx)
-	}()
+	// pgx runs this batch in one implicit transaction. Close consumes every
+	// result and reports statement/commit errors. Only this request is batched:
+	// an invalid attempt cannot roll back another request's history.
+	return s.pool.SendBatch(ctx, batch).Close()
+}
 
-	_, err = tx.Exec(ctx, `
+func recordBatch(record persistence.RequestRecord) (*pgx.Batch, error) {
+	if err := validateRecord(record); err != nil {
+		return nil, err
+	}
+	batch := &pgx.Batch{}
+	batch.Queue(`
 		INSERT INTO routeforge_requests (
 			request_id, started_at, completed_at, routing_policy, streaming,
 			logical_model, initial_provider, final_provider, outcome,
@@ -80,28 +82,25 @@ func (s *Store) Write(ctx context.Context, record persistence.RequestRecord) err
 	`, record.RequestID, record.StartedAt.UTC(), record.CompletedAt.UTC(), record.RoutingPolicy,
 		record.Streaming, record.LogicalModel, record.InitialProvider, record.FinalProvider,
 		record.Outcome, record.AttemptCount, record.FallbackCount, record.DurationUS, record.CacheHit)
-	if err != nil {
-		return err
-	}
 
 	for _, attempt := range record.Attempts {
 		input, err := postgresUint64(attempt.InputTokens)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		output, err := postgresUint64(attempt.OutputTokens)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		total, err := postgresUint64(attempt.TotalTokens)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		cost, err := postgresUint64(attempt.EstimatedCostMicroUSD)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		_, err = tx.Exec(ctx, `
+		batch.Queue(`
 			INSERT INTO routeforge_provider_attempts (
 				request_id, attempt_number, provider, resolved_provider_model,
 				fallback, started_at, completed_at, duration_us, ttfc_us, outcome,
@@ -110,11 +109,8 @@ func (s *Store) Write(ctx context.Context, record persistence.RequestRecord) err
 		`, record.RequestID, attempt.AttemptNumber, attempt.Provider, attempt.ResolvedProviderModel,
 			attempt.Fallback, attempt.StartedAt.UTC(), attempt.CompletedAt.UTC(), attempt.DurationUS,
 			attempt.TTFCUS, attempt.Outcome, input, output, total, cost)
-		if err != nil {
-			return err
-		}
 	}
-	return tx.Commit(ctx)
+	return batch, nil
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {

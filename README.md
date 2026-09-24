@@ -1158,6 +1158,14 @@ A deployment must explicitly configure
 
 ### Local HTTP performance validation
 
+Phase 9B adds a manual sustained persistence matrix:
+`./scripts/run-performance.sh sustained-run-1 sustained`. Cache is disabled;
+concurrency 8/32/64 runs for 30 seconds with persistence off/on. Per-request SQL
+batching improved measured durable write throughput 1.58–1.74× in the recorded
+local comparison, but **85.9–97.0% of history still dropped** under saturation.
+Inference stays fail-open; this is not lossless history or a production capacity
+claim. See the [sustained results and tradeoffs](benchmarks/performance/README.md#recorded-sustained-results).
+
 `cmd/routeforge-load` measures real RouteForge HTTP overhead against the local
 mock provider. It is separate from the deterministic routing-policy simulator:
 no real-provider performance or semantic quality is inferred.

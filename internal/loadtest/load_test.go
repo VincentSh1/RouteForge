@@ -188,12 +188,31 @@ func TestBoundsAndRedirects(t *testing.T) {
 	if request(context.Background(), client, c, 0).failure != "http_status" {
 		t.Fatal("redirect was followed")
 	}
-	for _, change := range []func(*Config){func(c *Config) { c.Concurrency = 65 }, func(c *Config) { c.Requests = 20001 }, func(c *Config) { c.MaxDuration = 6 * time.Minute }, func(c *Config) { c.Warmup = 0 }, func(c *Config) { c.CacheMode = "other" }} {
+	for _, change := range []func(*Config){func(c *Config) { c.Concurrency = 65 }, func(c *Config) { c.Requests = 1000001 }, func(c *Config) { c.MaxDuration = 6 * time.Minute }, func(c *Config) { c.Warmup = 0 }, func(c *Config) { c.CacheMode = "other" }} {
 		invalid := c
 		change(&invalid)
 		if invalid.Validate() == nil {
 			t.Fatal("invalid bounds accepted")
 		}
+	}
+}
+
+func TestSustainedBoundsAndSamplerCancellation(t *testing.T) {
+	c := Config{Port: 18080, Concurrency: 64, Requests: 1000000, Warmup: 2000, MaxDuration: 30 * time.Second, RequestTimeout: time.Second, CacheMode: "disabled"}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := make(chan samplingResult, 1)
+	go samplePersistence(ctx, 1, counters{}, result)
+	select {
+	case sampled := <-result:
+		if sampled.err != nil || len(sampled.samples) != 0 {
+			t.Fatal("canceled sampler made observations")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sampler leaked after cancellation")
 	}
 }
 
@@ -221,6 +240,21 @@ func TestMetricsParsing(t *testing.T) {
 	got, err := readCounters(context.Background(), client, c.Port)
 	if err != nil || got.Requests != 3 || got.Hits != 2 || got.Misses != 0 {
 		t.Fatal("metrics parsing failed")
+	}
+	if got.QueueDepth != nil || got.Submitted != nil || got.WriteSeconds != nil || got.WriteCount != nil {
+		t.Fatal("missing instrumentation fabricated zero values")
+	}
+}
+
+func TestPersistenceInstrumentParsing(t *testing.T) {
+	c, _ := fixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, "# TYPE routeforge_persistence_queue_depth gauge\nrouteforge_persistence_queue_depth 256\n# TYPE routeforge_persistence_submitted_total counter\nrouteforge_persistence_submitted_total 400\n# TYPE routeforge_persistence_writes_total counter\nrouteforge_persistence_writes_total 100\n# TYPE routeforge_persistence_write_duration_seconds_total counter\nrouteforge_persistence_write_duration_seconds_total 0.25\n")
+	}))
+	client := Client(1)
+	defer client.CloseIdleConnections()
+	got, err := readCounters(context.Background(), client, c.Port)
+	if err != nil || got.QueueDepth == nil || *got.QueueDepth != 256 || got.Submitted == nil || *got.Submitted != 400 || got.WriteCount == nil || *got.WriteCount != 100 || got.WriteSeconds == nil || *got.WriteSeconds != .25 {
+		t.Fatal("persistence instruments parsed incorrectly")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/VincentSh1/RouteForge/internal/openai"
+	"github.com/VincentSh1/RouteForge/internal/persistence"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -70,6 +71,29 @@ func TestMissingUsageAndCostCreateNoMeasurements(t *testing.T) {
 	}
 	if _, ok := collected["routeforge_estimated_cost_micro_usd"]; ok {
 		t.Fatal("missing cost created a cost measurement")
+	}
+}
+
+func TestPersistenceSnapshotMetrics(t *testing.T) {
+	metrics, reader := testMetrics(t)
+	if err := metrics.ObservePersistence(func() persistence.Stats {
+		return persistence.Stats{Submitted: 9, QueueDepth: 3, WriteCount: 5, WriteDuration: 20 * time.Millisecond}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	collected := collectMetrics(t, reader)
+	assertIntSum(t, collected, "routeforge_persistence_submitted", 9)
+	assertIntSum(t, collected, "routeforge_persistence_writes", 5)
+	queue := collected["routeforge_persistence_queue_depth"].Data.(metricdata.Gauge[int64])
+	if len(queue.DataPoints) != 1 || queue.DataPoints[0].Value != 3 || queue.DataPoints[0].Attributes.Len() != 0 {
+		t.Fatal("queue metric is not a label-free snapshot")
+	}
+	duration := collected["routeforge_persistence_write_duration"].Data.(metricdata.Sum[float64])
+	if duration.DataPoints[0].Value != .020 || !duration.IsMonotonic {
+		t.Fatal("write duration must be cumulative seconds")
+	}
+	if err := NoopMetrics().ObservePersistence(func() persistence.Stats { t.Fatal("disabled metrics inspected recorder"); return persistence.Stats{} }); err != nil {
+		t.Fatal(err)
 	}
 }
 
