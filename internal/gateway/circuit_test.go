@@ -132,3 +132,103 @@ func assertCircuitState(t *testing.T, tracker *healthTracker, state circuitState
 		t.Fatalf("state = %q, want %q", snapshot.State, state)
 	}
 }
+
+func TestCircuitStaleOutcomes(t *testing.T) {
+	for _, state := range []string{"open", "half_open", "recovered"} {
+		for _, outcome := range []string{"success", "failure", "ignore"} {
+			t.Run(state+"/"+outcome, func(t *testing.T) {
+				now := time.Unix(0, 0)
+				tracker := newHealthTracker([]string{"provider"}, CircuitConfig{FailureThreshold: 1, OpenDuration: time.Minute}, func() time.Time { return now })
+				stale, _ := tracker.begin("provider")
+				failing, _ := tracker.begin("provider")
+				failing.failure()
+				var probe *healthAttempt
+				if state != "open" {
+					now = now.Add(time.Minute)
+					probe, _ = tracker.begin("provider")
+					if state == "recovered" {
+						probe.success()
+					}
+				}
+				before, _ := tracker.snapshot("provider")
+				switch outcome {
+				case "success":
+					stale.success()
+				case "failure":
+					stale.failure()
+				case "ignore":
+					stale.ignore()
+				}
+				after, _ := tracker.snapshot("provider")
+				if after != before {
+					t.Fatalf("stale %s changed %s circuit: before=%+v after=%+v", outcome, state, before, after)
+				}
+				if state == "half_open" {
+					if _, ok := tracker.begin("provider"); ok {
+						t.Fatal("stale outcome released the probe")
+					}
+					probe.success()
+					assertCircuit(t, tracker, circuitClosed, 0)
+				}
+			})
+		}
+	}
+}
+
+func TestCircuitCanceledProbeCannotReleaseReplacement(t *testing.T) {
+	tracker := newHealthTracker([]string{"provider"}, CircuitConfig{FailureThreshold: 1}, nil)
+	initial, _ := tracker.begin("provider")
+	initial.failure()
+	old, _ := tracker.begin("provider")
+	old.ignore()
+	replacement, ok := tracker.begin("provider")
+	if !ok {
+		t.Fatal("canceled probe did not release admission")
+	}
+	before, _ := tracker.snapshot("provider")
+	old.ignore()
+	old.failure()
+	old.success()
+	after, _ := tracker.snapshot("provider")
+	if after != before {
+		t.Fatal("old probe mutated replacement state")
+	}
+	replacement.failure()
+	assertCircuitState(t, tracker, circuitOpen)
+}
+
+func TestCircuitConcurrentStaleOutcomesPreserveProbe(t *testing.T) {
+	tracker := newHealthTracker([]string{"provider"}, CircuitConfig{FailureThreshold: 1}, nil)
+	attempts := make([]*healthAttempt, 40)
+	for i := range attempts {
+		attempts[i], _ = tracker.begin("provider")
+	}
+	failing, _ := tracker.begin("provider")
+	failing.failure()
+	probe, _ := tracker.begin("provider")
+	before, _ := tracker.snapshot("provider")
+	var wg sync.WaitGroup
+	for i, attempt := range attempts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if i%2 == 0 {
+				attempt.success()
+			} else {
+				attempt.failure()
+			}
+			tracker.eligible("provider")
+			tracker.snapshot("provider")
+		}()
+	}
+	wg.Wait()
+	after, _ := tracker.snapshot("provider")
+	if after != before {
+		t.Fatal("concurrent stale outcomes changed probe state")
+	}
+	if _, ok := tracker.begin("provider"); ok {
+		t.Fatal("second probe admitted")
+	}
+	probe.success()
+	assertCircuit(t, tracker, circuitClosed, 0)
+}

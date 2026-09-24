@@ -30,6 +30,7 @@ type healthTracker struct {
 type providerHealth struct {
 	mu                  sync.Mutex
 	state               circuitState
+	generation          uint64
 	consecutiveFailures int
 	lastSuccess         time.Time
 	lastFailure         time.Time
@@ -38,10 +39,11 @@ type providerHealth struct {
 }
 
 type healthAttempt struct {
-	tracker  *healthTracker
-	provider *providerHealth
-	name     string
-	halfOpen bool
+	tracker    *healthTracker
+	provider   *providerHealth
+	name       string
+	halfOpen   bool
+	generation uint64
 }
 
 type healthSnapshot struct {
@@ -85,21 +87,25 @@ func (t *healthTracker) begin(providerName string) (*healthAttempt, bool) {
 			return nil, false
 		}
 		health.state = circuitHalfOpen
+		health.generation++
 		health.halfOpenInFlight = true
+		generation := health.generation
 		health.mu.Unlock()
 		t.notifyTransition(providerName, circuitOpen, circuitHalfOpen)
-		return &healthAttempt{tracker: t, provider: health, name: providerName, halfOpen: true}, true
+		return &healthAttempt{tracker: t, provider: health, name: providerName, halfOpen: true, generation: generation}, true
 	case circuitHalfOpen:
 		if health.halfOpenInFlight {
 			health.mu.Unlock()
 			return nil, false
 		}
 		health.halfOpenInFlight = true
+		generation := health.generation
 		health.mu.Unlock()
-		return &healthAttempt{tracker: t, provider: health, name: providerName, halfOpen: true}, true
+		return &healthAttempt{tracker: t, provider: health, name: providerName, halfOpen: true, generation: generation}, true
 	default:
+		generation := health.generation
 		health.mu.Unlock()
-		return &healthAttempt{tracker: t, provider: health, name: providerName}, true
+		return &healthAttempt{tracker: t, provider: health, name: providerName, generation: generation}, true
 	}
 }
 
@@ -127,8 +133,16 @@ func (t *healthTracker) eligible(providerName string) bool {
 func (a *healthAttempt) success() {
 	health := a.provider
 	health.mu.Lock()
+	// Outcomes belong only to the generation that admitted the attempt.
+	if a.generation != health.generation {
+		health.mu.Unlock()
+		return
+	}
 	previous := health.state
 	health.state = circuitClosed
+	if previous != circuitClosed {
+		health.generation++
+	}
 	health.consecutiveFailures = 0
 	health.lastSuccess = a.tracker.now()
 	health.openUntil = time.Time{}
@@ -142,12 +156,18 @@ func (a *healthAttempt) success() {
 func (a *healthAttempt) failure() {
 	health := a.provider
 	health.mu.Lock()
+	// Outcomes belong only to the generation that admitted the attempt.
+	if a.generation != health.generation {
+		health.mu.Unlock()
+		return
+	}
 	now := a.tracker.now()
 	previous := health.state
 	health.lastFailure = now
 	health.consecutiveFailures++
 	if a.halfOpen || health.consecutiveFailures >= a.tracker.failureThreshold {
 		health.state = circuitOpen
+		health.generation++
 		health.openUntil = now.Add(a.tracker.openDuration)
 		health.halfOpenInFlight = false
 	}
@@ -180,7 +200,11 @@ func (a *healthAttempt) ignore() {
 	}
 	health := a.provider
 	health.mu.Lock()
-	health.halfOpenInFlight = false
+	if a.generation == health.generation {
+		health.halfOpenInFlight = false
+		// Retire the canceled probe before admitting its replacement.
+		health.generation++
+	}
 	health.mu.Unlock()
 }
 

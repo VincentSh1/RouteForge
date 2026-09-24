@@ -57,9 +57,9 @@ func (p *Provider) Complete(ctx context.Context, req common.ChatCompletionReques
 		return common.ChatCompletionResponse{}, providerpkg.HTTPStatusError(Name, resp.StatusCode)
 	}
 
-	responseBody, err := providerpkg.ReadResponse(resp.Body, maxResponseSize)
+	responseBody, err := providerpkg.ReadResponse(Name, resp.Body, maxResponseSize)
 	if err != nil {
-		return common.ChatCompletionResponse{}, providerpkg.NewError(providerpkg.ErrorInternal, Name, err)
+		return common.ChatCompletionResponse{}, err
 	}
 	var decoded response
 	if err := json.Unmarshal(responseBody, &decoded); err != nil || len(decoded.Choices) == 0 {

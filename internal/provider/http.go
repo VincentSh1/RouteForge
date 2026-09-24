@@ -26,13 +26,17 @@ func HTTPClientForStreaming(client *http.Client) *http.Client {
 	return cloned
 }
 
-func ReadResponse(body io.Reader, limit int64) ([]byte, error) {
+func ReadResponse(providerName string, body io.Reader, limit int64) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(body, limit+1))
 	if err != nil {
-		return nil, errors.New("read upstream response")
+		var protocolErr *http.ProtocolError
+		if errors.As(err, &protocolErr) {
+			return nil, NewError(ErrorInternal, providerName, errors.New("invalid upstream response protocol"))
+		}
+		return nil, TransportError(providerName, err)
 	}
 	if int64(len(data)) > limit {
-		return nil, errors.New("upstream response too large")
+		return nil, NewError(ErrorInternal, providerName, errors.New("upstream response too large"))
 	}
 	return data, nil
 }
