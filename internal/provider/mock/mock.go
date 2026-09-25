@@ -9,7 +9,7 @@ import (
 	"github.com/VincentSh1/RouteForge/internal/provider"
 )
 
-// Provider is a deterministic local provider used by Phase 1 and its tests.
+// Provider supplies predictable local responses without external API calls.
 type Provider struct {
 	ResponseText   string
 	Err            error

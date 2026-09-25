@@ -8,7 +8,7 @@ capacity is measured. There is no performance pass/fail threshold in PR CI.
 ## Reproduce
 
 Prerequisites: Go from `go.mod`, Docker with Compose 2.24.4+ (`!override` support),
-`jq`, and `openssl`. From the repository root:
+`jq`, `curl`, and `openssl`. From the repository root:
 
 ```sh
 ./scripts/run-performance.sh local-run-1
@@ -17,7 +17,8 @@ Prerequisites: Go from `go.mod`, Docker with Compose 2.24.4+ (`!override` suppor
 This builds the real RouteForge Dockerfile and the Go client. It uses a separate
 `routeforge-performance` project, loopback ports 18080/18090, and the existing
 mock RouteForge, Redis and PostgreSQL services. It does not start Console,
-Prometheus or Grafana: metrics are scraped directly outside the measured window.
+Prometheus or Grafana: metrics are scraped directly. Burst mode scrapes outside
+the measured window; sustained mode also samples once per second during load.
 Redis/PostgreSQL are private; the normal demo's containers and data are untouched.
 Existing performance containers/volumes or an existing output file cause refusal.
 Cleanup removes only this disposable project's containers and volumes, including
@@ -73,7 +74,8 @@ outside the reported request window.
   may have dropped history. `persistence_settled=false` means the bounded drain
   observation did not finish; never interpret it as complete durable recording.
 - Counters must come from an isolated, non-restarting server. Concurrent unrelated
-  traffic invalidates the comparison. No scraping occurs during timed phases.
+  traffic invalidates the comparison. Burst mode avoids scraping during timed
+  phases; sustained mode includes the same one-second sampling in both builds.
 - Client Go/OS/architecture/CPU count and Docker VM CPU/memory/version are recorded,
   without hostname, username, paths, URLs, secrets, prompts or response content.
 
@@ -101,8 +103,8 @@ Without `-metrics-port`, observations are null and cache behavior is unverified.
 Counts are capped at 1,000,000, warm-up at 2,000, concurrency at 64, phase duration at
 5 minutes and request timeout at 30 seconds. Interrupting the client cancels workers.
 
-No production optimization is part of Phase 9A. A future optimization must follow
-a measured baseline, a material bottleneck, and a comparable after measurement.
+The burst baseline predates the persistence optimization documented below.
+Optimization requires a measured bottleneck and comparable before/after workloads.
 
 ## Recorded local baseline
 
@@ -132,16 +134,17 @@ At concurrency 64, warm hits wrote 289 records and dropped 711; HTTP p95 was
 
 The observed queue saturation is a real history-throughput limit for these bursts,
 not proof of a particular SQL/Go hotspot. HTTP availability and durable history
-coverage are different outcomes. No code optimization was made. Some on/off
+coverage are different outcomes. This report predates optimization. Some on/off
 timings reverse direction at other concurrency levels: these short, single-run
 measurements do not establish statistically reliable overhead ratios.
 
 Measured windows ranged from **0.049 to 0.771 seconds**. Use these numbers as a
 reproducible **short-burst baseline**, not sustained
-capacity, production SLOs, or paid-provider performance. Longer repeated runs and
-profiling would be needed before choosing an optimization.
+capacity, production SLOs, or paid-provider performance. The sustained experiment
+below investigates the persistence bottleneck; repeated runs would still be needed
+for stronger estimates of variance.
 
-## Sustained persistence validation (Phase 9B)
+## Sustained persistence validation
 
 ```sh
 ./scripts/run-performance.sh sustained-run-1 sustained
