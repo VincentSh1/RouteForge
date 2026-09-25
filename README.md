@@ -11,6 +11,10 @@ The project explores how to serve across heterogeneous providers without letting
 monitoring, caching, or durable history become routing dependencies. It is a
 modular monolith, not a semantic-quality router or a production deployment platform.
 
+[Run locally](#run-the-local-demo) · [Architecture](#architecture) ·
+[Measured results](#measured-performancenot-production-capacity) ·
+[Portfolio brief](docs/portfolio.md) · [Release notes](CHANGELOG.md)
+
 ## What it does
 
 - Synchronous and streaming completions through OpenAI, Anthropic, or a
@@ -77,6 +81,15 @@ docker compose down -v    # Also DELETE local history and monitoring data.
 Redis is intentionally ephemeral: no data volume, AOF, or RDB persistence.
 For startup/login troubleshooting and native development, see
 [development](docs/development.md).
+
+### Demo walkthrough and screenshots
+
+Use the [real-data capture guide](docs/demo.md) for Overview, Providers & Routing,
+request/attempt history, benchmark comparisons, and Grafana. It includes exact
+views, captions, and a short walkthrough. Screenshots are pending manual capture;
+no simulated UI images or fabricated traffic are presented as measurements.
+The [portfolio brief](docs/portfolio.md) provides evidence-linked resume bullets
+and 30-second/two-minute explanations without duplicating the API reference.
 
 ## Architecture
 

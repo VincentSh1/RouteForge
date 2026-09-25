@@ -1,12 +1,14 @@
 # Release notes
 
-## Unreleased — portfolio milestone candidate
+## Unreleased — v1.0-style portfolio milestone draft
 
 This summarizes the implemented system, not a fabricated version/tag history.
 No v1.0 release has been published by these notes.
 
 - Go OpenAI-compatible synchronous/streaming gateway with mock, OpenAI, and
-  Anthropic adapters; typed fallback, circuit breakers, and four routing policies.
+  Anthropic adapters; typed fallback before stream commitment and circuit breakers.
+- Deterministic, latency, cost, and latency-constrained cost routing, with
+  provider-specific model resolution and deterministic exploration.
 - Versioned deterministic offline policy benchmarks and a separate bounded local
   HTTP performance suite with checked-in burst/sustained measurements.
 - Optional OTel tracing, Prometheus metrics, Grafana provisioning, example SLOs,
@@ -22,6 +24,21 @@ No v1.0 release has been published by these notes.
   is not lossless history or a production capacity claim.
 - Reorganized overview, design decisions, configuration/API/observability references,
   and explicit local-run/security/measurement limitations.
+- Evidence-linked portfolio/interview brief, resume bullets, and a manual screenshot
+  plan using only real local mock traffic and clearly labeled offline fixtures.
+
+### Try it locally
+
+Follow the [admin-secret setup](README.md#run-the-local-demo), then run:
+
+```sh
+docker compose up --build -d --wait
+./scripts/generate-demo-traffic.sh
+```
+
+Console: http://127.0.0.1:3001 · Grafana: http://127.0.0.1:3000 ·
+Prometheus: http://127.0.0.1:9091. See the [demo guide](docs/demo.md) for the
+presentation sequence. This draft does not create a Git tag or GitHub Release.
 
 ### Evaluation boundaries
 
